@@ -59,6 +59,9 @@ void Wifi::retry_now() {
   retry_.retry_now(now_ms());
 }
 
+// Below this signal an access point is too faint to keep (dBm).
+constexpr int8_t kWeakRssi = -75;
+
 bool Wifi::configure(const std::string& ssid, const std::string& password, const hg::WifiFastAp* aim) {
   wifi_config_t cfg = {};
   std::memcpy(cfg.sta.ssid, ssid.data(), ssid.size());
@@ -116,7 +119,6 @@ void Wifi::remember_ap() {
   if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return;
   // Don't aim the next join at an access point heard this faintly: forget it, so the
   // next join scans and picks the strongest one (often a nearer mesh node).
-  constexpr int8_t kWeakRssi = -75;
   if (ap.rssi < kWeakRssi) {
     if (fast_.forget()) storage_->erase(hg::WifiFastJoin::kStorageKey);
     return;
@@ -274,12 +276,13 @@ void Wifi::tick(hg::App& app, uint32_t now) {
 
 void Wifi::attempt(uint32_t now) {
   scanning_ = false;
-  // Associated, yet no address came before this retry: a distant mesh node can hold the
-  // link up while DHCP never finishes, and connecting again over it only fails ("sta is
-  // connected"). Forget the remembered access point and leave; the disconnect retries
-  // with a full scan for the strongest one.
+  // Associated to a faint access point, yet no address came before this retry: a distant
+  // mesh node can hold the link up while DHCP never finishes, and connecting again over it
+  // only fails ("sta is connected"). Forget the remembered access point and leave; the
+  // disconnect retries with a full scan for the strongest one. On a good signal keep
+  // waiting: some routers take well over this retry interval to give an address.
   wifi_ap_record_t current = {};
-  if (!joining_ && !link_up_ && esp_wifi_sta_get_ap_info(&current) == ESP_OK) {
+  if (!joining_ && !link_up_ && esp_wifi_sta_get_ap_info(&current) == ESP_OK && current.rssi < kWeakRssi) {
     ESP_LOGW("hg.wifi", "no address from %02x:%02x:%02x:%02x:%02x:%02x (rssi %d); rejoining by scan",
              current.bssid[0], current.bssid[1], current.bssid[2], current.bssid[3], current.bssid[4],
              current.bssid[5], current.rssi);
