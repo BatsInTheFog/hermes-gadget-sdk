@@ -644,6 +644,14 @@ extern "C" void app_main(void) {
       if (std::memcmp(p, "WISPFACE", 8) == 0 && size >= 48 && size <= assets->size) {
         profile.face_asset = p;  // mapped for the life of the program
         profile.face_asset_size = size;
+        // Drawn from many times a second: a copy in PSRAM reads faster than the flash (here in
+        // two-wire DIO mode). Without room for it, the face draws from the mapped flash.
+        if (auto* copy = static_cast<uint8_t*>(heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT))) {
+          std::memcpy(copy, p, size);
+          profile.face_asset = copy;
+          esp_partition_munmap(handle);
+          ESP_LOGI(TAG, "Wisp face art copied to PSRAM");
+        }
 #if CONFIG_SPIRAM_USE_MALLOC
         profile.prefer_psram = [](bool on) {
           heap_caps_malloc_extmem_enable(on ? 0 : CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL);

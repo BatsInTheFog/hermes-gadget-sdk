@@ -1,6 +1,7 @@
 #include "hg/canvas.hpp"
 
 #include <algorithm>
+#include <cstring>
 
 #include "hg/font.hpp"
 #include "hg/font_cjk.hpp"
@@ -142,14 +143,20 @@ int Canvas::text_width(std::string_view s, int scale) {
 int Canvas::line_height(int scale) { return font::kCellHeight * scale; }
 
 void Canvas::blit(int x, int y, int w, int h, const uint16_t* src) {
+  // The columns that land on the framebuffer, once; then each row is a straight copy.
+  const int c0 = std::max(0, -x), c1 = std::min(w, w_ - x);
+  if (c1 <= c0) return;
   for (int row = 0; row < h; ++row) {
     int yy = y + row;
     if (yy < clip_y0_ || yy >= clip_y1_ || yy >= h_ || yy < 0) continue;
     if (yy < base_y_ || yy >= base_y_ + rows_) continue;
-    for (int col = 0; col < w; ++col) {
-      int xx = x + col;
-      if (xx < 0 || xx >= w_) continue;
-      px_[(yy - base_y_) * stride_ + xx] = encode(src[row * w + col]);
+    const uint16_t* in = src + static_cast<size_t>(row) * w + c0;
+    uint16_t* out = px_ + static_cast<size_t>(yy - base_y_) * stride_ + x + c0;
+    const int n = c1 - c0;
+    if (swap_) {
+      for (int i = 0; i < n; ++i) out[i] = static_cast<uint16_t>((in[i] >> 8) | (in[i] << 8));
+    } else {
+      std::memcpy(out, in, static_cast<size_t>(n) * 2);
     }
   }
 }
