@@ -125,10 +125,11 @@ void add_part(FaceFrame& f, const WispFace::Part& part, float x, float y, float 
       drew = true;
       // The source column under dx0's centre, then one step per destination column.
       int32_t pos = static_cast<int32_t>(std::floor(((dx0 + 0.5f - left) * inv_sx - sx0) * 65536.0f));
+      const uint16_t* pix16 = reinterpret_cast<const uint16_t*>(pix);  // 2-byte aligned, little-endian
       for (int dx = dx0; dx < dx1; ++dx, pos += step) {
         const int src_x = pos >> 16;  // arithmetic shift: floors negatives too
-        if (src_x < 0 || src_x >= n) continue;
-        const uint16_t c = u16(pix + 2 * src_x);
+        if (static_cast<unsigned>(src_x) >= static_cast<unsigned>(n)) continue;
+        const uint16_t c = pix16[src_x];
         if (!c) continue;
         const uint16_t d = out[dx];
         int r = (c >> 11), g = (c >> 5) & 63, b = c & 31;

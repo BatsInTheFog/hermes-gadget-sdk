@@ -1403,8 +1403,8 @@ void App::lip_feed(const int16_t* samples, size_t count, uint32_t rate) {
 }
 
 float App::lip_level(uint32_t t, uint32_t window_ms) {
-  // The loudest chunk playing during the last frame's window (so a short syllable between
-  // two frames still opens the mouth), against the loudest recent chunk.
+  // The loudest chunk playing during the window before `t` (so a short syllable between two
+  // frames still opens the mouth), against the loudest recent chunk. `t` may be ahead of now.
   while (lip_head_ < lip_.size() && static_cast<int32_t>(lip_[lip_head_].at + 20 + window_ms - t) < 0) ++lip_head_;
   uint8_t loudest = 0;
   bool any = false;
@@ -2624,14 +2624,17 @@ void App::tick() {
   }
   // Wisp's face animates at its own rate while it is on screen (only its rows are redrawn).
   if (model_.wisp && !display_sleeping_) {
-    // At most every kFaceFrameMs, and never more than half the time: a frame that took long
-    // waits as long again, so audio, touch and the connection keep their share.
+    // At most every kFaceFrameMs, and at most about four fifths of the time: a frame that took
+    // long waits a quarter as long again, so touch and the connection keep a share (audio
+    // plays from its own buffer and task).
     const uint32_t interval = model_.screen == Screen::Clock ? kFaceClockFrameMs : kFaceFrameMs;  // asleep: slower
-    if (t - face_at_ >= std::max(interval, 2 * face_cost_ms_)) {
+    if (t - face_at_ >= std::max(interval, face_cost_ms_ + face_cost_ms_ / 4)) {
       // A reply being spoken: the mouth follows the loudness being heard, closed between
       // bursts. Elsewhere (the `face speaking` test) it makes up syllables.
+      // It aims at when this frame will show: drawing and sending it takes about as long as the
+      // last one did, so the sound looked up is that far ahead of now.
       if (wisp_renderer_.state() == WispState::Speaking && model_.screen == Screen::Responding)
-        wisp_renderer_.set_talk_level(speaking() ? lip_level(t, t - face_at_) : 0.0f);
+        wisp_renderer_.set_talk_level(speaking() ? lip_level(t + face_cost_ms_, t - face_at_) : 0.0f);
       else
         wisp_renderer_.set_talk_level(-1.0f);
       wisp_renderer_.step(static_cast<float>(t - face_at_) / 1000.0f);

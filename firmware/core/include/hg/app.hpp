@@ -922,10 +922,11 @@ class App {
   std::vector<int16_t> lip_carry_;  // samples short of a whole chunk, kept for the next write
   void lip_reset();
   void lip_feed(const int16_t* samples, size_t count, uint32_t rate);
-  float lip_level(uint32_t t, uint32_t window_ms);
+  float lip_level(uint32_t at, uint32_t window_ms);
 public:
-  // How long the speaker takes from a write to sound, beyond the queue (tuned by eye).
-  static constexpr uint32_t kLipLatencyMs = 60;
+  // How long the speaker takes from a write to sound, beyond the queue (tuned by eye: the
+  // board's first try at 60 ms looked late).
+  static constexpr uint32_t kLipLatencyMs = 0;
 private:
   static constexpr uint32_t kFaceFrameMs = 33;  // about 30 frames a second
   static constexpr uint32_t kFaceClockFrameMs = 100;  // asleep on the resting clock: 10 a second
