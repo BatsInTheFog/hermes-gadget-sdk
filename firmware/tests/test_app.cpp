@@ -1,5 +1,6 @@
 // Drives hg::App through a fake HAL the way a Hermes gateway would.
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <deque>
 #include <map>
@@ -9678,4 +9679,41 @@ TEST("wisp face: the face animates at about 30 frames a second while it is on sc
   r.advance(1000);
   const uint32_t frames = r.app.model().wisp_frame - f0;
   CHECK(frames >= 25 && frames <= 35);
+}
+
+TEST("wisp face: the mouth follows the reply audio's loudness as it plays") {
+  const auto file = wisp_file();
+  Rig r(wisp_profile(file));
+  r.bring_online(true);
+  r.server(R"({"type":"turn.start","turn":"t1"})");
+  r.server(R"({"type":"audio.start","stream":3,"rate":16000,"format":"pcm16"})");
+  r.server(R"({"type":"reply","turn":"t1","text":"Hello there."})");
+  // 200 ms loud, 200 ms silent, 200 ms loud, all sent at once (the server sends ahead).
+  uint16_t seq = 0;
+  auto send = [&](bool loud) {
+    for (int c = 0; c < 10; ++c) {
+      std::vector<uint8_t> frame(hg::proto::kBinaryHeader + 640, 0);
+      hg::proto::write_binary_header(frame.data(), hg::proto::Channel::Audio, 3, seq++);
+      for (int i = 0; i < 320 && loud; ++i) {
+        const int16_t v = static_cast<int16_t>(12000 * std::sin(i * 0.39));
+        frame[hg::proto::kBinaryHeader + 2 * i] = static_cast<uint8_t>(v);
+        frame[hg::proto::kBinaryHeader + 2 * i + 1] = static_cast<uint8_t>(static_cast<uint16_t>(v) >> 8);
+      }
+      r.app.on_transport_binary(frame.data(), frame.size());
+    }
+  };
+  send(true);
+  send(false);
+  send(true);
+  CHECK(r.app.screen() == hg::Screen::Responding);
+  CHECK(face_is(r, "speaking"));
+  const hg::WispFaceRenderer* face = r.app.model().wisp;
+  CHECK(face != nullptr);
+  // Playback starts after the speaker's delay; the mouth opens on the loud part only.
+  r.advance(hg::App::kLipLatencyMs + 120);
+  CHECK(face->pose().talk_amp > 0.6f);
+  r.advance(220);
+  CHECK(face->pose().talk_amp < 0.1f);
+  r.advance(200);
+  CHECK(face->pose().talk_amp > 0.6f);
 }

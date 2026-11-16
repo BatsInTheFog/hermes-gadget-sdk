@@ -510,7 +510,16 @@ void WispFaceRenderer::choose_gaze(float dt) {
 
 void WispFaceRenderer::step(float dt) {
   if (!face_) return;
-  dt = std::clamp(dt, 0.0f, 0.05f);
+  dt = std::clamp(dt, 0.0f, 0.5f);
+  do {
+    const float d = std::min(dt, 0.05f);
+    step_once(d);
+    dt -= d;
+  } while (dt > 1e-4f);
+  ++frame_;
+}
+
+void WispFaceRenderer::step_once(float dt) {
   Pose& p = pose_;
   p.t += dt;
   const float t = p.t;
@@ -598,7 +607,6 @@ void WispFaceRenderer::step(float dt) {
   }
   p.mouth = mi;
   p.mouth_side = side;
-  ++frame_;
 }
 
 void WispFaceRenderer::draw(FaceFrame& f) const {

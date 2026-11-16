@@ -909,6 +909,24 @@ class App {
   WispState face_force_ = WispState::Idle;
   uint32_t face_at_ = 0;  // the face's last animation step
   uint32_t face_cost_ms_ = 0;  // how long the last face frame took to step and draw
+  // Lip sync: the reply audio's loudness per 20 ms, stamped with when the speaker plays it
+  // (after everything queued before it), so the mouth follows what is heard, not what arrived.
+  struct LipChunk {
+    uint32_t at = 0;    // when it starts playing (app ms)
+    uint8_t level = 0;  // level_percent of the chunk
+  };
+  std::vector<LipChunk> lip_;
+  size_t lip_head_ = 0;
+  uint32_t lip_cursor_ = 0;      // when the audio queued so far finishes playing
+  float lip_peak_ = 70;          // the loudest recent chunk, decaying (scales the mouth)
+  std::vector<int16_t> lip_carry_;  // samples short of a whole chunk, kept for the next write
+  void lip_reset();
+  void lip_feed(const int16_t* samples, size_t count, uint32_t rate);
+  float lip_level(uint32_t t, uint32_t window_ms);
+public:
+  // How long the speaker takes from a write to sound, beyond the queue (tuned by eye).
+  static constexpr uint32_t kLipLatencyMs = 60;
+private:
   static constexpr uint32_t kFaceFrameMs = 33;  // about 30 frames a second
   static constexpr uint32_t kFaceClockFrameMs = 100;  // asleep on the resting clock: 10 a second
   static constexpr float kFaceClockScale = 0.62f;  // the resting clock's face, in the top half

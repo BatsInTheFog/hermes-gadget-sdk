@@ -1324,6 +1324,7 @@ void App::h_audio_start(const json::Value& m) {
   if (settings_open()) close_settings();
   if (!hal_.speaker || recording_unsent()) return;
   uint32_t rate = static_cast<uint32_t>(m["rate"].as_int(profile_.speaker_rate));
+  lip_reset();  // a new reply: its audio starts the lip-sync timeline afresh
   const std::string_view format = m["format"].str_or("pcm16");
   const bool decoded = hal_.speaker_decoder && format == hal_.speaker_decoder->format();
   if (format != "pcm16" && !decoded) {
@@ -1363,6 +1364,61 @@ void App::h_audio_abort(const json::Value& m) {
 void App::stop_playback() {
   if (hal_.speaker && (in_stream_ >= 0 || hal_.speaker->busy())) hal_.speaker->abort();
   in_stream_ = -1;
+  lip_reset();
+}
+
+void App::lip_reset() {
+  lip_.clear();
+  lip_head_ = 0;
+  lip_cursor_ = 0;
+  lip_carry_.clear();
+}
+
+void App::lip_feed(const int16_t* samples, size_t count, uint32_t rate) {
+  if (!wisp_renderer_.ready() || !rate || !count) return;
+  const size_t chunk = rate / 50;  // 20 ms
+  if (!chunk) return;
+  const uint32_t t = now();
+  // A new burst after the queue ran dry starts playing now, after the speaker's own delay.
+  if (static_cast<int32_t>(lip_cursor_ - t) < 0) lip_cursor_ = t + kLipLatencyMs;
+  auto push = [&](const int16_t* s) {
+    const uint8_t level = level_percent(rms(s, chunk));
+    lip_.push_back({lip_cursor_, level});
+    lip_cursor_ += 20;
+  };
+  size_t i = 0;
+  if (!lip_carry_.empty()) {  // finish the chunk the last write left short
+    while (lip_carry_.size() < chunk && i < count) lip_carry_.push_back(samples[i++]);
+    if (lip_carry_.size() < chunk) return;
+    push(lip_carry_.data());
+    lip_carry_.clear();
+  }
+  for (; i + chunk <= count; i += chunk) push(samples + i);
+  lip_carry_.assign(samples + i, samples + count);
+  // Drop what has played long ago; keep the vector from growing over a long reply.
+  if (lip_head_ > 256) {
+    lip_.erase(lip_.begin(), lip_.begin() + static_cast<std::ptrdiff_t>(lip_head_));
+    lip_head_ = 0;
+  }
+}
+
+float App::lip_level(uint32_t t, uint32_t window_ms) {
+  // The loudest chunk playing during the last frame's window (so a short syllable between
+  // two frames still opens the mouth), against the loudest recent chunk.
+  while (lip_head_ < lip_.size() && static_cast<int32_t>(lip_[lip_head_].at + 20 + window_ms - t) < 0) ++lip_head_;
+  uint8_t loudest = 0;
+  bool any = false;
+  for (size_t k = lip_head_; k < lip_.size(); ++k) {
+    const int32_t start = static_cast<int32_t>(lip_[k].at - t);
+    if (start > 0) break;  // not playing yet
+    loudest = std::max(loudest, lip_[k].level);
+    any = true;
+  }
+  if (!any) return 0;
+  lip_peak_ = std::max(lip_peak_ * 0.995f, static_cast<float>(loudest));
+  lip_peak_ = std::max(lip_peak_, 50.0f);
+  // About 27 dB of range below the peak opens the mouth from closed to wide.
+  return std::clamp((loudest - (lip_peak_ - 45.0f)) / 45.0f, 0.0f, 1.0f);
 }
 
 bool App::speaking() const { return hal_.speaker && (in_stream_ >= 0 || hal_.speaker->busy()); }
@@ -1388,13 +1444,17 @@ void App::on_transport_binary(const uint8_t* data, size_t len) {
       constexpr size_t kMaxPacketMs = 120;  // the longest Opus packet
       pcm_buf_.resize(static_cast<size_t>(in_rate_) * kMaxPacketMs / 1000);  // the stream's rate, not the profile's
       const int n = hal_.speaker_decoder->decode(f.payload, f.payload_len, pcm_buf_.data(), pcm_buf_.size());
-      if (n > 0) hal_.speaker->write(pcm_buf_.data(), static_cast<size_t>(n));
+      if (n > 0) {
+        hal_.speaker->write(pcm_buf_.data(), static_cast<size_t>(n));
+        lip_feed(pcm_buf_.data(), static_cast<size_t>(n), in_rate_);
+      }
       return;
     }
     size_t n = f.payload_len / 2;
     pcm_buf_.resize(n);
     std::memcpy(pcm_buf_.data(), f.payload, n * 2);  // payload may be unaligned
     hal_.speaker->write(pcm_buf_.data(), n);
+    lip_feed(pcm_buf_.data(), n, in_rate_);
     return;
   }
   if (f.channel == proto::Channel::Image) {
@@ -2568,6 +2628,12 @@ void App::tick() {
     // waits as long again, so audio, touch and the connection keep their share.
     const uint32_t interval = model_.screen == Screen::Clock ? kFaceClockFrameMs : kFaceFrameMs;  // asleep: slower
     if (t - face_at_ >= std::max(interval, 2 * face_cost_ms_)) {
+      // A reply being spoken: the mouth follows the loudness being heard, closed between
+      // bursts. Elsewhere (the `face speaking` test) it makes up syllables.
+      if (wisp_renderer_.state() == WispState::Speaking && model_.screen == Screen::Responding)
+        wisp_renderer_.set_talk_level(speaking() ? lip_level(t, t - face_at_) : 0.0f);
+      else
+        wisp_renderer_.set_talk_level(-1.0f);
       wisp_renderer_.step(static_cast<float>(t - face_at_) / 1000.0f);
       face_at_ = t;
       model_.wisp_frame = wisp_renderer_.frame();

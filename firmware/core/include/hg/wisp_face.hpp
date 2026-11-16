@@ -116,7 +116,8 @@ class WispFaceRenderer {
   // The whole face drawn smaller with its eyes on another row (the resting clock's top half).
   // scale 1 and eye_y below 0: the spec's size and eye line.
   void set_view(float scale, float eye_y) { view_scale_ = scale, view_eye_y_ = eye_y; }
-  // Advances the animation by dt seconds (clamped to 50 ms, as the preview does).
+  // Advances the animation by dt seconds, in sub-steps of at most 50 ms (the preview's step),
+  // so a slow frame rate keeps real-time speed; gaps over 0.5 s count as 0.5 s.
   void step(float dt);
   // Draws the current frame. Clears to black first: only the rows the previous frame drew,
   // when it is the same buffer (the rest is black already), else every row.
@@ -165,6 +166,7 @@ class WispFaceRenderer {
   void draw_pose(FaceFrame& f, const Pose& p, bool clear) const;
   bool can_blink() const;
   void choose_gaze(float dt);
+  void step_once(float dt);
   float rand(float a, float b);
 
   const WispFace* face_ = nullptr;

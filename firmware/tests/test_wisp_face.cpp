@@ -217,8 +217,11 @@ TEST("wisp face: the animation runs: time, frames, wandering gaze and blinks") {
   CHECK(sf.r.time() > 11.9f && sf.r.time() < 12.1f);
   CHECK(moved);
   CHECK(blinked && half);  // a blink shows the half, then the closed drawing
-  sf.r.step(5);            // a long gap counts as 50 ms, as in the preview
-  CHECK(sf.r.time() < 12.2f);
+  const float before = sf.r.time();
+  sf.r.step(0.2f);  // a slow frame: real time, in 50 ms sub-steps
+  CHECK(std::fabs(sf.r.time() - before - 0.2f) < 0.001f);
+  sf.r.step(5);  // a long gap counts as 0.5 s
+  CHECK(std::fabs(sf.r.time() - before - 0.7f) < 0.001f);
 }
 
 TEST("wisp face: asleep, she doesn't blink and her flame dims and slows") {
