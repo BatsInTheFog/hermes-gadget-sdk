@@ -627,15 +627,27 @@ void Ui::draw_frame(const UiModel& m) {
       draw_bands(y0, y1, i == 0 ? &Ui::draw_top : &Ui::draw_bottom, m);
       hash_[i] = hashes[i];
     }
-    uint32_t stat = Hash().val(m.screen).val(m.wisp != nullptr).add(m.headline).add(m.detail).add(m.yes).add(m.no).val(m.caption_lines)
+    // With Wisp's face the text is two lines over the art: a change to it repaints just those
+    // rows (with the face's changed rows), not the whole band.
+    const uint32_t text = m.wisp ? Hash().add(m.headline).add(m.detail).get() : 0u;
+    uint32_t stat = Hash().val(m.screen).val(m.wisp != nullptr).add(m.wisp ? std::string() : m.headline)
+                        .add(m.wisp ? std::string() : m.detail).add(m.yes).add(m.no).val(m.caption_lines)
                         .val(m.name_target).add(m.face ? m.face->hash : std::string()).get();
     uint32_t anim = hero_anim_key(m);
     int y0 = y_header, y1 = y_bottom;
     bool redraw = !valid_ || !hero_valid_ || stat != hero_static_;
-    if (!redraw && anim != hero_anim_) {
-      hero_anim_rows(m, y0, y1);  // only what can move
+    const bool text_changed = m.wisp && text != hero_text_;
+    if (!redraw && (anim != hero_anim_ || text_changed)) {
+      if (anim != hero_anim_) hero_anim_rows(m, y0, y1);  // only what can move
+      else y0 = y1 = wisp_text_top();
+      if (text_changed) {
+        const int t0 = wisp_text_top(), t1 = std::min(y_bottom, t0 + 2 * Canvas::line_height(layout_.scale) + layout_.scale);
+        y0 = y1 > y0 ? std::min(y0, t0) : t0;
+        y1 = std::max(y1, t1);
+      }
       redraw = true;
     }
+    hero_text_ = text;
     if (redraw && m.wisp) ++(y0 == y_header && y1 == y_bottom ? wisp_timing_.full_bands : wisp_timing_.row_bands);
     if (redraw) draw_bands(y0, y1, &Ui::draw_hero, m);
     hero_static_ = stat;
@@ -1621,8 +1633,10 @@ void Ui::ensure_wisp(const UiModel& m) {
   if (wisp_from_ == m.wisp && wisp_frame_ == m.wisp_frame) return;  // composed once per face frame
   FaceFrame f{wisp_fb_.data(), info_.width, info_.height, 0, 0};
   const uint64_t t0 = clock_ ? clock_->now_us() : 0;
+  const bool mouth = m.wisp->mouth_only();
   m.wisp->draw(f);
-  if (clock_) wisp_timing_.compose_us += clock_->now_us() - t0, ++wisp_timing_.composes;
+  if (clock_ && mouth) wisp_timing_.mouth_compose_us += clock_->now_us() - t0, ++wisp_timing_.mouth_composes;
+  else if (clock_) wisp_timing_.compose_us += clock_->now_us() - t0, ++wisp_timing_.composes;
   wisp_from_ = m.wisp;
   wisp_frame_ = m.wisp_frame;
 }

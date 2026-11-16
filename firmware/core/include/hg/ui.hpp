@@ -212,8 +212,8 @@ class Ui {
   // the face, copying it into the display's buffer, and its text; and how many hero redraws
   // repainted the whole band rather than just the face's changed rows.
   struct WispTiming {
-    uint64_t compose_us = 0, copy_us = 0, text_us = 0, copy_rows = 0;
-    uint32_t composes = 0, copies = 0, texts = 0, full_bands = 0, row_bands = 0;
+    uint64_t compose_us = 0, copy_us = 0, text_us = 0, copy_rows = 0, mouth_compose_us = 0;
+    uint32_t composes = 0, copies = 0, texts = 0, full_bands = 0, row_bands = 0, mouth_composes = 0;
   };
   const WispTiming& wisp_timing() const { return wisp_timing_; }
   void reset_wisp_timing() { wisp_timing_ = WispTiming{}; }
@@ -348,6 +348,7 @@ class Ui {
   const WispFaceRenderer* wisp_from_ = nullptr;
   uint32_t wisp_frame_ = 0;
   WispTiming wisp_timing_;
+  uint32_t hero_text_ = 0;  // Wisp's face: the text last drawn over it
   void ensure_wisp(const UiModel& m);
   void draw_wisp_clock(const UiModel& m);
   void blit_wisp(Canvas& c, int y0, int y1);

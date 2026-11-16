@@ -1154,7 +1154,8 @@ std::string App::wisp_timing_json() const {
   auto avg = [](uint64_t us, uint32_t n) { return n ? std::to_string((us + n / 2) / n) : std::string("0"); };
   return ",\"timing\":{\"compose_us\":" + avg(w.compose_us, w.composes) + ",\"copy_us\":" + avg(w.copy_us, w.copies) +
          ",\"copy_rows\":" + avg(w.copy_rows, w.copies) + ",\"text_us\":" + avg(w.text_us, w.texts) +
-         ",\"composes\":" + std::to_string(w.composes) + ",\"full_bands\":" + std::to_string(w.full_bands) +
+         ",\"composes\":" + std::to_string(w.composes) + ",\"mouth_compose_us\":" + avg(w.mouth_compose_us, w.mouth_composes) +
+         ",\"full_bands\":" + std::to_string(w.full_bands) +
          ",\"row_bands\":" + std::to_string(w.row_bands) + "}";
 }
 

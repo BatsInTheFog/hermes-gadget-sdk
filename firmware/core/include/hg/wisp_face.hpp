@@ -123,6 +123,7 @@ class WispFaceRenderer {
   // and everything else stay exactly as the last full step left them (time does not move), so
   // the next draw() redraws just a band of rows around the mouth.
   void step_mouth();
+  bool mouth_only() const { return mouth_only_; }
   // Draws the current frame. Clears to black first: only the rows the previous frame drew,
   // when it is the same buffer (the rest is black already), else every row. After
   // step_mouth(), only the mouth's band of rows.
