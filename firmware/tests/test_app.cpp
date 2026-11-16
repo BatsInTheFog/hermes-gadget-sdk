@@ -9717,3 +9717,49 @@ TEST("wisp face: the mouth follows the reply audio's loudness as it plays") {
   r.advance(200);
   CHECK(face->pose().talk_amp > 0.6f);
 }
+
+TEST("wisp face: while she speaks, the mouth lane runs between full frames; the face holds still") {
+  const auto file = wisp_file();
+  Rig r(wisp_profile(file));
+  r.bring_online(true);
+  r.server(R"({"type":"turn.start","turn":"t1"})");
+  r.server(R"({"type":"audio.start","stream":3,"rate":16000,"format":"pcm16"})");
+  r.server(R"({"type":"reply","turn":"t1","text":"Hello there."})");
+  uint16_t seq = 0;
+  for (int c = 0; c < 100; ++c) {  // 2 s of syllables: 60 ms loud, 40 ms quiet
+    std::vector<uint8_t> frame(hg::proto::kBinaryHeader + 640, 0);
+    hg::proto::write_binary_header(frame.data(), hg::proto::Channel::Audio, 3, seq++);
+    if (c % 5 < 3)
+      for (int i = 0; i < 320; ++i) {
+        const int16_t v = static_cast<int16_t>(12000 * std::sin(i * 0.39));
+        frame[hg::proto::kBinaryHeader + 2 * i] = static_cast<uint8_t>(v);
+        frame[hg::proto::kBinaryHeader + 2 * i + 1] = static_cast<uint8_t>(static_cast<uint16_t>(v) >> 8);
+      }
+    r.app.on_transport_binary(frame.data(), frame.size());
+  }
+  r.advance(100);
+  CHECK(face_is(r, "speaking"));
+  auto count = [&](const char* key) {
+    const std::string f = r.app.console("face");
+    const size_t at = f.find(std::string("\"") + key + "\":");
+    return at == std::string::npos ? -1 : std::atoi(f.c_str() + at + std::strlen(key) + 3);
+  };
+  const int full0 = count("full_frames"), mouth0 = count("mouth_frames");
+  const hg::WispFaceRenderer* face = r.app.model().wisp;
+  // Between full frames, time (and so the face's place) doesn't move while the mouth does.
+  float t_seen = face->time();
+  int same_time_mouth_frames = 0;
+  uint32_t frame_seen = face->frame();
+  for (int i = 0; i < 100; ++i) {
+    r.advance(10);
+    if (face->frame() != frame_seen) {
+      if (face->time() == t_seen) ++same_time_mouth_frames;
+      t_seen = face->time();
+      frame_seen = face->frame();
+    }
+  }
+  const int full = count("full_frames") - full0, mouth = count("mouth_frames") - mouth0;
+  CHECK(full >= 8 && full <= 11);  // about 10 a second
+  CHECK(mouth >= 15);             // about 30 a second in all, the rest mouth-only
+  CHECK(same_time_mouth_frames >= 15);
+}

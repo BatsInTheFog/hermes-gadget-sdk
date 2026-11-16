@@ -930,6 +930,10 @@ public:
 private:
   static constexpr uint32_t kFaceFrameMs = 33;  // about 30 frames a second
   static constexpr uint32_t kFaceClockFrameMs = 100;  // asleep on the resting clock: 10 a second
+  static constexpr uint32_t kFaceSpeakFullMs = 100;   // speaking: the whole face 10 a second,
+  static constexpr uint32_t kFaceMouthMs = 33;        // and the mouth lane 30 a second between
+  uint32_t face_full_at_ = 0, face_mouth_cost_ms_ = 0;
+  uint32_t face_full_frames_ = 0, face_mouth_frames_ = 0;  // counted for the `face` command
   static constexpr float kFaceClockScale = 0.62f;  // the resting clock's face, in the top half
   uint32_t face_success_until_ = 0, face_sad_until_ = 0;
   std::string turn_outcome_;  // the last turn.end's outcome

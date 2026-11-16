@@ -119,8 +119,13 @@ class WispFaceRenderer {
   // Advances the animation by dt seconds, in sub-steps of at most 50 ms (the preview's step),
   // so a slow frame rate keeps real-time speed; gaps over 0.5 s count as 0.5 s.
   void step(float dt);
+  // The mouth lane: between full steps, only the mouth's shape follows the voice. Its place
+  // and everything else stay exactly as the last full step left them (time does not move), so
+  // the next draw() redraws just a band of rows around the mouth.
+  void step_mouth();
   // Draws the current frame. Clears to black first: only the rows the previous frame drew,
-  // when it is the same buffer (the rest is black already), else every row.
+  // when it is the same buffer (the rest is black already), else every row. After
+  // step_mouth(), only the mouth's band of rows.
   void draw(FaceFrame& f) const;
   // The rows the last draw() changed: what it drew now and what it cleared from before.
   void changed_rows(int& y0, int& y1) const { y0 = changed_y0_, y1 = changed_y1_; }
@@ -167,6 +172,8 @@ class WispFaceRenderer {
   bool can_blink() const;
   void choose_gaze(float dt);
   void step_once(float dt);
+  void update_mouth();
+  void mouth_band(int frame_w, int& y0, int& y1) const;
   float rand(float a, float b);
 
   const WispFace* face_ = nullptr;
@@ -202,6 +209,8 @@ class WispFaceRenderer {
   mutable std::vector<float> row_dx_;  // the flame's per-row sway, reused each frame
   // The previous draw(): its buffer and the rows it wrote, and the rows the last draw changed.
   mutable const uint16_t* last_px_ = nullptr;
+  bool mouth_only_ = false;  // the last step was step_mouth(): draw() redraws the mouth band
+  float max_mouth_h_ = 0;    // the tallest mouth drawing (rows), for the mouth band
   mutable int last_y0_ = 0, last_y1_ = 0, changed_y0_ = 0, changed_y1_ = 0;
 };
 

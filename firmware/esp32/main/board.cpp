@@ -346,6 +346,7 @@ BoardConfig make() {
   b.amoled.gap_y = 0;       // no inset (the bars keep their text clear of the corners)
   b.amoled.corner_inset = 18;  // the top bar's text clears the rounded corners
   b.amoled.panel = AmoledPanel::Sh8601_368;
+  b.amoled.qspi_mhz = 80;   // twice Gadget's 40 MHz: sends a frame in about half the time (Wisp's face)
   b.i2c = {15, 14, 400000};
   b.codec.enabled = true;
   b.codec.mclk = 16;

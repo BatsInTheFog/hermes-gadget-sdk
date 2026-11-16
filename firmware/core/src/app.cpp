@@ -2623,28 +2623,43 @@ void App::tick() {
     if (bars_shown_) update_model();
   }
   // Wisp's face animates at its own rate while it is on screen (only its rows are redrawn).
-  if (model_.wisp && !display_sleeping_) {
-    // At most every kFaceFrameMs, and at most about four fifths of the time: a frame that took
-    // long waits a quarter as long again, so touch and the connection keep a share (audio
-    // plays from its own buffer and task).
-    const uint32_t interval = model_.screen == Screen::Clock ? kFaceClockFrameMs : kFaceFrameMs;  // asleep: slower
-    if (t - face_at_ >= std::max(interval, face_cost_ms_ + face_cost_ms_ / 4)) {
-      // A reply being spoken: the mouth follows the loudness being heard, closed between
-      // bursts. Elsewhere (the `face speaking` test) it makes up syllables.
-      // It aims at when this frame will show: drawing and sending it takes about as long as the
-      // last one did, so the sound looked up is that far ahead of now.
-      if (wisp_renderer_.state() == WispState::Speaking && model_.screen == Screen::Responding)
-        wisp_renderer_.set_talk_level(speaking() ? lip_level(t + face_cost_ms_, t - face_at_) : 0.0f);
-      else
-        wisp_renderer_.set_talk_level(-1.0f);
-      wisp_renderer_.step(static_cast<float>(t - face_at_) / 1000.0f);
+  // At most every kFaceFrameMs, and at most about four fifths of the time: a frame that took
+  // long waits a quarter as long again, so touch and the connection keep a share (audio plays
+  // from its own buffer and task).
+  const bool face_on = model_.wisp && !display_sleeping_;
+  const bool replying = model_.screen == Screen::Responding && wisp_renderer_.state() == WispState::Speaking;
+  const bool lane = face_on && replying && speaking();
+  if (lane && t - face_full_at_ < std::max(kFaceSpeakFullMs, face_cost_ms_ + face_cost_ms_ / 4)) {
+    // Speaking, between full frames: only the mouth's shape moves (the mouth lane), at its
+    // place from the last full frame, aimed at the sound heard when it reaches the screen.
+    if (t - face_at_ >= std::max(kFaceMouthMs, face_mouth_cost_ms_ + face_mouth_cost_ms_ / 4)) {
+      wisp_renderer_.set_talk_level(lip_level(t + face_mouth_cost_ms_, t - face_at_));
+      wisp_renderer_.step_mouth();
+      ++face_mouth_frames_;
       face_at_ = t;
+      model_.wisp_frame = wisp_renderer_.frame();
+      render(model_);
+      face_mouth_cost_ms_ = now() - t;
+    }
+  } else if (face_on) {
+    const uint32_t interval = lane                             ? kFaceSpeakFullMs
+                              : model_.screen == Screen::Clock ? kFaceClockFrameMs  // asleep: slower
+                                                               : kFaceFrameMs;
+    if (t - face_full_at_ >= std::max(interval, face_cost_ms_ + face_cost_ms_ / 4)) {
+      // A reply being spoken: the mouth follows the loudness being heard, closed between
+      // bursts, aimed at when this frame will show (drawing and sending it takes about as long
+      // as the last one did). Elsewhere (the `face speaking` test) it makes up syllables.
+      if (replying) wisp_renderer_.set_talk_level(speaking() ? lip_level(t + face_cost_ms_, t - face_at_) : 0.0f);
+      else wisp_renderer_.set_talk_level(-1.0f);
+      wisp_renderer_.step(static_cast<float>(t - face_full_at_) / 1000.0f);
+      ++face_full_frames_;
+      face_at_ = face_full_at_ = t;
       model_.wisp_frame = wisp_renderer_.frame();
       render(model_);
       face_cost_ms_ = now() - t;
     }
   } else {
-    face_at_ = t;
+    face_at_ = face_full_at_ = t;
   }
 
   // Text that follows a hero screen, such as a reply after its speech, gets its first page's reading time.
@@ -3197,7 +3212,8 @@ std::string App::console(std::string_view raw) {
     if (!wisp_renderer_.ready()) return "@error no Wisp face loaded";
     if (rest.empty())
       return std::string("@face {\"state\":\"") + wisp_state_name(wisp_renderer_.state()) + "\",\"forced\":" +
-             (face_forced_ ? "true" : "false") + "}";
+             (face_forced_ ? "true" : "false") + ",\"full_frames\":" + std::to_string(face_full_frames_) +
+             ",\"mouth_frames\":" + std::to_string(face_mouth_frames_) + "}";
     WispState s;
     if (rest == "auto") face_forced_ = false;
     else if (wisp_state_from(rest, s)) face_forced_ = true, face_force_ = s;

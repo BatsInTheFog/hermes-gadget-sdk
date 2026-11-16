@@ -317,6 +317,12 @@ bool WispFaceRenderer::begin(const WispFace& face, std::string* error, uint32_t 
     for (size_t k = 0; k < l["left"].size(); ++k) lad.left.push_back(entry(l["left"][k]));
     ladders_.push_back(std::move(lad));
   }
+  max_mouth_h_ = 0;
+  for (const Ladder& l : ladders_) {
+    for (const Entry* e : {&l.fwd}) max_mouth_h_ = std::max<float>(max_mouth_h_, e->part->h);
+    for (const Entry& e : l.right) if (e.part) max_mouth_h_ = std::max<float>(max_mouth_h_, e.part->h);
+    for (const Entry& e : l.left) if (e.part) max_mouth_h_ = std::max<float>(max_mouth_h_, e.part->h);
+  }
   flame_ = entry(m["flame"]);
   if (eyes_l_.empty() || ladders_.empty() || !flame_.part) return fail(error, "face file lacks the idle parts");
   const char* prop_names[3] = {"browser", "quill", "mic"};
@@ -511,6 +517,7 @@ void WispFaceRenderer::choose_gaze(float dt) {
 
 void WispFaceRenderer::step(float dt) {
   if (!face_) return;
+  mouth_only_ = false;
   dt = std::clamp(dt, 0.0f, 0.5f);
   do {
     const float d = std::min(dt, 0.05f);
@@ -582,6 +589,12 @@ void WispFaceRenderer::step_once(float dt) {
   // The prop fades out before another fades in.
   if (look.prop >= 0 && look.prop != p.prop && p.prop_alpha < 0.05f) p.prop = look.prop;
   p.prop_alpha = approach(p.prop_alpha, look.prop >= 0 && look.prop == p.prop ? 1.0f : 0.0f, dt, 0.12f);
+  update_mouth();
+}
+
+void WispFaceRenderer::update_mouth() {
+  Pose& p = pose_;
+  const StateLook& look = looks_[static_cast<int>(state_)];
   // Mouth: the shape, then which drawing of its ladder; a turned drawing is kept until the
   // glance comes back past its switch point by a margin (no flicker near the point).
   int mi = look.mouth;
@@ -610,10 +623,52 @@ void WispFaceRenderer::step_once(float dt) {
   p.mouth_side = side;
 }
 
+void WispFaceRenderer::step_mouth() {
+  if (!face_) return;
+  const StateLook& look = looks_[static_cast<int>(state_)];
+  if (look.talk && talk_in_ >= 0) pose_.talk_amp = std::clamp(talk_in_, 0.0f, 1.0f);
+  update_mouth();
+  mouth_only_ = true;
+  ++frame_;
+}
+
+void WispFaceRenderer::mouth_band(int frame_w, int& y0, int& y1) const {
+  // Where draw_pose puts the mouth's centre row for this pose, and room for its tallest drawing.
+  const Pose& p = pose_;
+  const float D = glance_, fs = face_size_ * view_scale_;
+  const float breath = breath_ * std::sin(p.t * (state_ == WispState::Sleepy ? 0.9f : 1.6f));
+  const float eye_line = view_eye_y_ >= 0 ? view_eye_y_ : eye_line_;
+  const float oy = eye_line - eye_cy_ * fs + p.body_y * D * follow_ * fs;
+  const float tilt = std::fabs(p.gaze_y) * pitch_;
+  const float lift = std::min(0.0f, p.gaze_y) * D * up_lift_;
+  const float my = mouth_y_ + p.gaze_y * D * mouth_depth_ * 0.6f + lift * 0.85f - tilt * (mouth_y_ - eye_cy_) * 0.9f +
+                   breath * 0.8f;
+  const float cy = fs * my + oy, reach = max_mouth_h_ * mouth_scale_ * fs + 6;
+  (void)frame_w;
+  y0 = static_cast<int>(std::floor(cy - reach));
+  y1 = static_cast<int>(std::ceil(cy + reach));
+}
+
 void WispFaceRenderer::draw(FaceFrame& f) const {
   if (!face_ || !f.px) return;
   int y0, y1;
   row_range(f, y0, y1);
+  if (mouth_only_ && f.px == last_px_) {
+    // The mouth lane: clear and redraw only the mouth's band, everything in it exactly as the
+    // last full step placed it, then send just those rows.
+    int b0, b1;
+    mouth_band(f.w, b0, b1);
+    b0 = std::max(b0, y0), b1 = std::min(b1, y1);
+    if (b1 > b0) {
+      std::memset(f.px + static_cast<size_t>(b0) * f.w, 0, static_cast<size_t>(b1 - b0) * f.w * 2);
+      FaceFrame g = f;
+      g.y0 = b0, g.y1 = b1;
+      draw_pose(g, pose_, false);
+      last_y0_ = std::min(last_y0_, b0), last_y1_ = std::max(last_y1_, b1);
+    }
+    changed_y0_ = b0, changed_y1_ = std::max(b0, b1);
+    return;
+  }
   // Clear what the previous frame drew (the rest is black already), or everything on a new buffer.
   int c0 = y0, c1 = y1;
   if (f.px == last_px_) c0 = std::max(y0, last_y0_), c1 = std::min(y1, last_y1_);
