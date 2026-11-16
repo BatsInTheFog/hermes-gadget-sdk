@@ -1087,6 +1087,48 @@ bool App::show_reply_text() {
   return true;
 }
 
+void App::reveal_bars() {
+  if (!profile_.autohide_bars) return;
+  bars_until_ = now() + kBarsShowMs;
+  if (!bars_until_) bars_until_ = 1;  // 0 means hidden
+  update_model();
+}
+
+bool App::chat_swipe_live() const {
+  if (!profile_.chat_view || display_sleeping_ || settings_open() || overlay_ != Overlay::None) return false;
+  return chat_open_ || (model_.screen == Screen::Ready && mode_ == Mode::Idle);
+}
+
+void App::toggle_chat() {
+  chat_open_ = !chat_open_;
+  chat_scroll_ = -1;  // opens on the newest line
+  if (!chat_open_) reply_until_ = now();  // back to the face, not the last reply's text
+  update_model();
+}
+
+void App::chat_add(bool user, const std::string& text, const std::string& turn) {
+  if (text.empty()) return;
+  // A reply sent again for the same turn replaces the one already kept.
+  if (!user && !turn.empty() && turn == chat_reply_turn_ && !chat_.empty() && !chat_.back().user) {
+    chat_.back().text = text;
+  } else {
+    chat_.push_back({user, text});
+    if (chat_.size() > kMaxChatLines) chat_.erase(chat_.begin(), chat_.end() - kMaxChatLines);
+  }
+  chat_reply_turn_ = user ? std::string() : turn;
+  chat_scroll_ = -1;
+}
+
+std::string App::chat_text() const {
+  if (chat_.empty()) return "No messages yet.";
+  std::string out;
+  for (const ChatLine& line : chat_) {
+    if (!out.empty()) out += "\n\n";
+    out += (line.user ? std::string("You") : name_) + ": " + line.text;
+  }
+  return out;
+}
+
 int App::profile_row_hit(int x, int y) const { return ui_ ? ui_->profile_row_hit(model_, x, y) : -1; }
 
 void App::profile_tap(int x, int y) {
@@ -1171,6 +1213,7 @@ void App::h_status(const json::Value& m) {
 void App::h_transcript(const json::Value& m) {
   // What speech-to-text heard; shown as the user's line while Hermes works.
   user_echo_ = m["text"].as_string();
+  chat_add(true, user_echo_);
   last_turn_rx_ = now();
   if (status_ == "Sending...") status_.clear();
 }
@@ -1200,6 +1243,7 @@ void App::h_reply(const json::Value& m) {
   }
   if (recording_unsent()) return;
   reply_ = text;
+  chat_add(false, text, m["turn"].as_string());
   reply_final_ = true;
   reply_unread_ = true;
   scroll_ = 0;  // a finished reply is read from the top
@@ -1653,6 +1697,7 @@ void App::on_button(Button button, bool pressed, bool touch) {
       } else if (mode_ == Mode::Listening) cancel_listening("cancelled");
       else if (overlay_ != Overlay::None) dismiss_overlay();
       else if (mode_ == Mode::Thinking || mode_ == Mode::Responding) cancel_turn();
+      else if (chat_open_) toggle_chat();
       else if (dashboard_ready_ && paired_) {
         overlay_ = Overlay::Dashboard;
         overlay_until_ = 0;
@@ -1667,7 +1712,17 @@ void App::on_button(Button button, bool pressed, bool touch) {
       if (prompt_showing()) break;
       if (show_reply_text()) return;
       page_at_ = now() + kManualScrollPauseMs;
-      if (mode_ == Mode::Idle && overlay_ == Overlay::None && !reply_.empty() &&
+      if (chat_open_ && mode_ == Mode::Idle && overlay_ == Overlay::None) {
+        // The chat view: half a screen back (Up) or forward (Down), from the newest.
+        if (ui_) {
+          const int total = static_cast<int>(wrap_text(chat_text(), ui_->layout().body_cols).size());
+          const int max_first = std::max(0, total - ui_->body_rows(model_));
+          const int cur = chat_scroll_ < 0 ? max_first : std::min(chat_scroll_, max_first);
+          const int step = std::max(1, ui_->body_rows(model_) / 2);
+          chat_scroll_ = std::max(0, std::min(max_first, cur + (button == Button::Up ? -step : step)));
+          if (chat_scroll_ == max_first) chat_scroll_ = -1;  // back at the newest: follow new lines again
+        }
+      } else if (mode_ == Mode::Idle && overlay_ == Overlay::None && !reply_.empty() &&
           static_cast<int32_t>(reply_until_ - now()) <= 0) {
         reply_until_ = now() + kReplyLingerMs;  // first press brings the last reply back
         scroll_ = 0;
@@ -1906,6 +1961,9 @@ void App::start_new_session() {
   send(proto::message("session.new"));
   reply_.clear();
   user_echo_.clear();
+  chat_.clear();  // a new Hermes session starts a new conversation
+  chat_reply_turn_.clear();
+  chat_scroll_ = -1;
   status_ = tr(i18n::Msg::StartingNewSession);
   scroll_ = -1;
   mode_ = Mode::Thinking;
@@ -1984,6 +2042,7 @@ void App::submit_text(std::string_view text) {
   msg.set("id", request_id_).set("text", t);
   send(msg);
   user_echo_ = t;
+  chat_add(true, t);
   reply_.clear();
   status_ = tr(i18n::Msg::Sending);
   scroll_ = -1;
@@ -2019,6 +2078,7 @@ uint32_t App::page_dwell_ms() const {
 bool App::turn_page() {
   // Only text screens that are read from the top page; a streaming reply stays pinned to its end.
   if (!ui_ || model_.hero) return false;
+  if (chat_open_ && model_.screen == Screen::Ready) return false;  // the chat view scrolls only by hand
   if (model_.screen == Screen::Dashboard) {
     // A dashboard longer than the screen cycles through its pages, back to the top.
     const int rows = ui_->dash_rows(), total = static_cast<int>(dash_rows_.size());
@@ -2431,6 +2491,10 @@ void App::tick() {
     hint_flash_until_ = 0;
     update_model();
   }
+  if (bars_until_ && static_cast<int32_t>(t - bars_until_) >= 0) {  // the swipe's bars hide again
+    bars_until_ = 0;
+    if (bars_shown_) update_model();
+  }
 
   // Text that follows a hero screen, such as a reply after its speech, gets its first page's reading time.
   if (model_.hero) page_at_ = t + page_dwell_ms();
@@ -2471,6 +2535,7 @@ void App::update_model() {
   m.face = face_ ? &*face_ : nullptr;
   m.dash.clear();
   m.hero = false;
+  m.chrome = true;  // every screen shows the bars unless the end of this decides otherwise
   m.name_target = false;
   m.caption_lines = 1;
   m.scroll = scroll_;
@@ -2801,6 +2866,16 @@ void App::update_model() {
         m.caption_lines = 2;
       }
     }
+    if (chat_open_) {
+      // The chat view: the conversation so far as text, newest at the bottom.
+      m.hero = false;
+      m.name_target = false;
+      m.headline = "Conversation";
+      m.detail.clear();
+      m.body = chat_text();
+      m.scroll = chat_scroll_;
+      m.hint = profile_.touch_screen ? "Swipe left for the face" : tr(Msg::ButtonToClose, {cancel});
+    }
     if (clock_showing_) {
       // The resting clock owns the whole panel: the time, the date and the mascot.
       m.screen = Screen::Clock;
@@ -2825,6 +2900,13 @@ void App::update_model() {
       *power_status_->battery_percent <= 10 && power_status_->external_power == false)
     m.detail = tr(Msg::LowBattery);
   if (!hint_flash_.empty()) m.hint = hint_flash_;
+  // autohide_bars: the conversation screens keep the bars dark while online, unless a swipe
+  // just asked for them or the hint bar carries a message of its own.
+  const bool conversation = m.screen == Screen::Ready || m.screen == Screen::Listening ||
+                            m.screen == Screen::Thinking || m.screen == Screen::Responding;
+  const bool asked = bars_until_ && static_cast<int32_t>(bars_until_ - now()) > 0;
+  m.chrome = !(profile_.autohide_bars && conversation && m.link == Link::Online && hint_flash_.empty() && !asked);
+  bars_shown_ = m.chrome;
   if (!display_sleeping_) render(m);
 }
 

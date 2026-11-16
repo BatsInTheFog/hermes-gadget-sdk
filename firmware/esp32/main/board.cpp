@@ -367,11 +367,14 @@ BoardConfig make() {
   // high while pressed, as on V2. It acts as CANCEL.
   b.pwr_key = {true, 0x20, 4, true};
   b.axp2101 = true;
+  b.rtc.enabled = true;  // PCF85063 at 0x51 on the shared bus keeps the time across power loss
   // TCA9554: P0 LCD_RST, P1 the panel's power rail, P2 TOUCH_RST, P4 the PWR key (input).
   b.expander_reset = {0x20, 0x07, 20, 150};
   b.buttons = {0, -1, -1, -1};  // BOOT also works as TALK
   b.talk_label = "BOOT";
   b.cancel_label = "Swipe down";
+  b.autohide_bars = true;  // the face alone; a swipe shows the bars for a few seconds
+  b.chat_view = true;      // swipe left: the conversation so far
   return b;
 }
 #elif CONFIG_HG_BOARD_AMOLED_206

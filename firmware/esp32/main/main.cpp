@@ -615,6 +615,8 @@ extern "C" void app_main(void) {
   if (touch && board.touch.enabled) {
     profile.touch_screen = true;
     profile.touch_ppi = board.touch.ppi;
+    profile.autohide_bars = board.autohide_bars;
+    profile.chat_view = board.chat_view;
     profile.extra_settings = {"touch_cancel"};
   }
   profile.extra_settings.push_back("timezone");  // the port keeps its own time

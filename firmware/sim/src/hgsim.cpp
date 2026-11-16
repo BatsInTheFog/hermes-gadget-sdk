@@ -248,6 +248,9 @@ hgsim* hgsim_create(const hgsim_config* cfg, const hgsim_host* host) {
     profile.touch_screen = true;
     if (!cfg->cancel_label) profile.cancel_label = "Swipe down";
     profile.extra_settings = {"touch_cancel"};
+    // The 1.8" AMOLED profile mirrors the V1 board's touch UI (board.cpp): bars hidden until a
+    // swipe, swipe left for the conversation. Keyed on the name to keep the host ABI unchanged.
+    if (profile.board == "sim-368x448") profile.autohide_bars = profile.chat_view = true;
   }
   profile.motion_sensor = cfg->motion != 0;
   profile.colour_face_alloc = std::malloc;

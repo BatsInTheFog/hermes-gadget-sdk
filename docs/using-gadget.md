@@ -8,6 +8,8 @@ Wait for the device to show Ready. On the LCD board, BOOT is TALK and PLUS is CA
 | Interrupt a spoken reply | Hold TALK to start speaking |
 | Read a spoken reply in full before it ends | Tap the screen, or press Up or Down |
 | Bring the last reply back after the mascot returns, and page through it | Press Up or Down; on a touchscreen, swipe up |
+| See the whole conversation (boards with the chat view, such as the AMOLED-1.8 V1) | Swipe left; swipe down and up to scroll it, swipe left again or CANCEL to go back |
+| Show the top and hint bars (boards that hide them, such as the AMOLED-1.8 V1) | Swipe in any direction; they hide again after 5 s |
 | Discard a recording, close a card, or stop a turn | Tap CANCEL |
 | Start a fresh conversation | Hold CANCEL for two seconds |
 | Open or close the [dashboard](#watch-hermes-sessions-on-the-dashboard) | Tap CANCEL on the idle screen |

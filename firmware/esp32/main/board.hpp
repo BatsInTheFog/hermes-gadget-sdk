@@ -368,6 +368,9 @@ struct BoardConfig {
   int speaker_dac = -1;
   const char* talk_label = "TALK";
   const char* cancel_label = "CANCEL";
+  // Touch UI options (hg::DeviceProfile): bars hidden until a swipe, and a swipe-left chat view.
+  bool autohide_bars = false;
+  bool chat_view = false;
 };
 
 // GPIO held high to power the panel's peripheral rail. Boards without one

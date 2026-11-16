@@ -15,6 +15,10 @@
 //   swipe up           a DOWN press and release: on Ready it brings the last reply
 //                      back, and further swipes page through it (for boards with no
 //                      scroll keys)
+//   swipe left         with chat_view, opens the conversation, or closes it again;
+//                      else the profile grid as above
+//   in the chat view   swipe down scrolls back (UP) instead of CANCEL; swipe up forward
+//   any swipe          with autohide_bars, shows the top and hint bars for a while
 //
 // With the touch_talk setting off, holds and taps press TALK only where it doesn't
 // record (settings, a question, a ringing alarm); elsewhere they do nothing, and the
@@ -52,7 +56,7 @@ class TouchGestures {
   void tick(uint32_t now_ms);
 
  private:
-  enum class State : uint8_t { Idle, Pending, Settings, Picker, PickerDrag, Side, List, ListDrag, Camera, Talk, Swipe, Up, Ignored };
+  enum class State : uint8_t { Idle, Pending, Settings, Picker, PickerDrag, Side, List, ListDrag, Camera, Talk, Swipe, Up, Down, Ignored };
   void press(Button b);
   void release(Button b);
 

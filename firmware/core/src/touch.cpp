@@ -49,18 +49,32 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
       case State::Camera: app_.camera_tap(); break;
       case State::Side:  // a sideways swipe: travel enough, and more sideways than down or up
         if (std::abs(dx_) >= cfg_.swipe_px && std::abs(dx_) > 2 * std::abs(dy_)) {
-          if (in_picker_) app_.profile_page_step(dx_ < 0 ? 1 : -1);  // the next page comes in from the right
-          else if (dx_ < 0) app_.open_profile_picker();  // from right to left, as the grid's next page
+          if (in_picker_) {
+            app_.profile_page_step(dx_ < 0 ? 1 : -1);  // the next page comes in from the right
+          } else {
+            if (dx_ < 0 && app_.chat_swipe_live()) app_.toggle_chat();  // from right to left
+            else if (dx_ < 0 && app_.profile_swipe_opens()) app_.open_profile_picker();  // as the grid's next page
+            app_.reveal_bars();
+          }
         }
         break;
       case State::Up:  // an upward swipe: travel enough, and more up than sideways
         if (-dy_ >= cfg_.swipe_px && std::abs(dx_) < -dy_) {
           press(Button::Down);
           release(Button::Down);
+          app_.reveal_bars();
         }
         break;
+      case State::Down:  // the chat view: a downward swipe scrolls back
+        press(Button::Up);
+        release(Button::Up);
+        app_.reveal_bars();
+        break;
       case State::Talk: release(Button::Talk); break;
-      case State::Swipe: release(Button::Cancel); break;
+      case State::Swipe:
+        release(Button::Cancel);
+        app_.reveal_bars();
+        break;
       default: break;
     }
     state_ = State::Idle;
@@ -137,13 +151,17 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
       }
       break;
     case State::Pending:
-      if (swiped_down) {
+      if (swiped_down && app_.chat_open() && app_.chat_swipe_live()) {
+        state_ = State::Down;  // in the chat view a swipe down scrolls back, on the lift
+      } else if (swiped_down) {
         state_ = State::Swipe;
         press(Button::Cancel);
       } else if (std::abs(dx) > cfg_.slop_px || std::abs(dy) > cfg_.slop_px) {
-        // Neither a hold nor a downward swipe yet: one from right to left may open the profile
-        // grid; wait for a clear swipe, else ignore.
-        if (dx < 0 && std::abs(dx) >= std::abs(dy) && !from_clock_ && app_.profile_swipe_opens()) {
+        // Neither a hold nor a downward swipe yet: a sideways one may open the profile grid or
+        // the chat view, or show the bars; wait for a clear swipe, else ignore.
+        const bool sideways_acts = (dx < 0 && (app_.profile_swipe_opens() || app_.chat_swipe_live())) ||
+                                   app_.autohides_bars();
+        if (std::abs(dx) >= std::abs(dy) && !from_clock_ && sideways_acts) {
           state_ = State::Side;
           in_picker_ = false;
           dx_ = dx, dy_ = dy;

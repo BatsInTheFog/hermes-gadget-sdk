@@ -52,6 +52,12 @@ struct DeviceProfile {
   // The screen stands in for the buttons (hold to talk, tap to answer yes,
   // swipe to cancel); on-screen hints are worded for touch.
   bool touch_screen = false;
+  // The top bar and the hint bar stay dark on the conversation screens while online, and a
+  // swipe in any direction shows them for kBarsShowMs (App::reveal_bars).
+  bool autohide_bars = false;
+  // A sideways swipe from right to left on the Ready screen opens the conversation so far
+  // (what Hermes heard and its replies), and another closes it (App::toggle_chat).
+  bool chat_view = false;
   // The touchscreen's pixels per inch, so tap targets are about 7 mm tall; 0 assumes kDefaultTouchPpi.
   uint16_t touch_ppi = 0;
   static constexpr uint16_t kDefaultTouchPpi = 200;
@@ -210,6 +216,22 @@ class App {
   int profile_per_page() const;
   // A tap or a scroll while a spoken reply's latest lines caption the talking face shows its whole text.
   bool show_reply_text();
+  // autohide_bars: shows the top and hint bars for kBarsShowMs (any swipe calls it).
+  void reveal_bars();
+  bool bars_hidden() const { return !model_.chrome; }
+  bool autohides_bars() const { return profile_.autohide_bars; }
+  static constexpr uint32_t kBarsShowMs = 5000;
+  // chat_view: whether a sideways swipe now opens or closes the conversation, and doing it.
+  bool chat_swipe_live() const;
+  void toggle_chat();
+  bool chat_open() const { return chat_open_; }
+  // The conversation kept for the chat view: the newest kMaxChatLines lines.
+  struct ChatLine {
+    bool user = false;
+    std::string text;
+  };
+  const std::vector<ChatLine>& chat() const { return chat_; }
+  static constexpr size_t kMaxChatLines = 40;
   bool profile_picker_open() const { return overlay_ == Overlay::Profiles; }
   bool profile_switch_pending() const { return !profile_pending_.empty(); }
   static constexpr uint32_t kProfileReplyMs = 15000;
@@ -786,6 +808,16 @@ class App {
   std::string status_;
   std::string user_echo_;
   int scroll_ = -1;
+  // autohide_bars: the bars show until then (0: hidden).
+  uint32_t bars_until_ = 0;
+  bool bars_shown_ = false;  // as last drawn, so tick() redraws once when they hide again
+  // chat_view: the conversation so far, the view's state and its scroll (-1: the newest line).
+  std::vector<ChatLine> chat_;
+  std::string chat_reply_turn_;  // the turn whose reply is chat_'s last line, so a resend replaces it
+  bool chat_open_ = false;
+  int chat_scroll_ = -1;
+  void chat_add(bool user, const std::string& text, const std::string& turn = std::string());
+  std::string chat_text() const;
   uint32_t page_at_ = 0;  // when long text turns its next page
   uint8_t level_ = 0;
   Vad vad_;

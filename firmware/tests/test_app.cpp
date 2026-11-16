@@ -1780,6 +1780,122 @@ TEST("touch: a swipe up brings the last reply back; a short or sideways one does
   CHECK(!r.fake.mic_on);
 }
 
+namespace {
+hg::DeviceProfile wisp_touch_profile() {
+  hg::DeviceProfile p = Rig::touch_profile();
+  p.autohide_bars = true;
+  p.chat_view = true;
+  return p;
+}
+}  // namespace
+
+TEST("touch: with autohide_bars, the bars stay dark on Ready until a swipe, then hide again") {
+  Rig r(wisp_touch_profile());
+  r.bring_online(true);
+  r.advance(4000);  // past "Paired with Hermes" in the hint bar
+  CHECK(r.app.screen() == hg::Screen::Ready);
+  CHECK(!r.app.model().chrome);
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 300, 200, r.fake.clock);  // a swipe from left to right does nothing else
+  touch.update(true, 240, 205, r.fake.clock);
+  touch.update(true, 180, 210, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  touch.update(true, 100, 200, r.fake.clock);
+  touch.update(true, 170, 202, r.fake.clock);
+  touch.update(true, 240, 204, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.model().chrome);
+  CHECK(!r.fake.mic_on);
+  r.server(R"({"type":"ping","ts":1})");
+  r.advance(hg::App::kBarsShowMs + 100);
+  CHECK(!r.app.model().chrome);
+}
+
+TEST("touch: without autohide_bars the bars always show") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  r.advance(4000);
+  CHECK(r.app.model().chrome);
+}
+
+TEST("touch: settings and setup screens keep their bars with autohide_bars") {
+  Rig r(wisp_touch_profile());
+  r.bring_online(true);
+  r.advance(4000);
+  CHECK(!r.app.model().chrome);
+  r.app.console("settings");
+  CHECK(r.app.settings_open());
+  CHECK(r.app.model().chrome);
+}
+
+TEST("touch: swipe left opens the conversation, swipe left again goes back to the face") {
+  Rig r(wisp_touch_profile());
+  r.bring_online(true);
+  r.app.submit_text("what time is it");
+  r.server(R"({"type":"turn.start","turn":"t1"})");
+  r.server(R"({"type":"reply","turn":"t1","text":"It is noon."})");
+  r.server(R"({"type":"turn.end","turn":"t1","outcome":"success"})");
+  r.server(R"({"type":"turn.start","turn":"t2"})");
+  r.server(R"({"type":"transcript","text":"and the date"})");
+  r.server(R"({"type":"reply","turn":"t2","text":"It is Monday."})");
+  r.server(R"({"type":"reply","turn":"t2","text":"It is Monday the 16th."})");  // a resend replaces
+  r.server(R"({"type":"turn.end","turn":"t2","outcome":"success"})");
+  r.advance(200);
+  r.server(R"({"type":"ping","ts":1})");
+  r.advance(21000);
+  CHECK(r.app.model().hero);
+  CHECK_EQ(r.app.chat().size(), size_t(4));
+  hg::TouchGestures touch(r.app);
+  auto swipe_left = [&] {
+    touch.update(true, 300, 200, r.fake.clock);
+    touch.update(true, 240, 203, r.fake.clock);
+    touch.update(true, 180, 206, r.fake.clock);
+    touch.update(false, 0, 0, r.fake.clock);
+  };
+  swipe_left();
+  CHECK(r.app.chat_open());
+  CHECK(!r.app.model().hero);
+  CHECK_EQ(r.app.model().headline, std::string("Conversation"));
+  CHECK(r.app.model().body.find("You: what time is it") != std::string::npos);
+  CHECK(r.app.model().body.find(": It is noon.") != std::string::npos);
+  CHECK(r.app.model().body.find("You: and the date") != std::string::npos);
+  CHECK(r.app.model().body.find("It is Monday the 16th.") != std::string::npos);
+  CHECK(r.app.model().body.find("It is Monday.\n") == std::string::npos);
+  CHECK(r.app.model().chrome);  // the swipe showed the bars
+  r.server(R"({"type":"ping","ts":1})");
+  r.advance(30000);  // the view stays until swiped away
+  CHECK(r.app.chat_open());
+  CHECK(!r.app.model().hero);
+  // A swipe down scrolls back instead of cancelling; nothing records.
+  touch.update(true, 200, 100, r.fake.clock);
+  touch.update(true, 202, 150, r.fake.clock);
+  touch.update(true, 204, 200, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.chat_open());
+  CHECK(!r.fake.mic_on);
+  swipe_left();
+  CHECK(!r.app.chat_open());
+  CHECK(r.app.model().hero);
+}
+
+TEST("chat view: CANCEL closes it, and a new session clears the conversation") {
+  Rig r(wisp_touch_profile());
+  r.bring_online(true);
+  r.app.submit_text("hello");
+  r.server(R"({"type":"turn.start","turn":"t1"})");
+  r.server(R"({"type":"reply","turn":"t1","text":"Hi."})");
+  r.server(R"({"type":"turn.end","turn":"t1","outcome":"success"})");
+  r.advance(200);
+  r.app.toggle_chat();
+  CHECK(r.app.chat_open());
+  r.app.on_button(hg::Button::Cancel, true);
+  r.app.on_button(hg::Button::Cancel, false);
+  CHECK(!r.app.chat_open());
+  CHECK_EQ(r.app.chat().size(), size_t(2));
+  r.app.console("new-session");
+  CHECK(r.app.chat().empty());
+}
+
 TEST("touch: with touch_wake off, a dark screen ignores the touchscreen until a key lights it") {
   hg::DeviceProfile p = Rig::touch_profile();
   p.wake_key = true;

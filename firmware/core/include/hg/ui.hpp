@@ -100,6 +100,9 @@ struct UiModel {
   bool battery_low = false;
   uint32_t frame = 0;    // animation frame, advanced by the app
   std::string hint;      // bottom bar
+  // The top bar and the bottom bar are drawn; false leaves both bands dark (the layout
+  // keeps their rows, so nothing else moves when they come back).
+  bool chrome = true;
   std::string yes, no;   // answer buttons under the hero caption (Prompt screen)
   // Show the mascot as large as fits, with headline/detail as a caption,
   // instead of the header + text layout.
