@@ -12,6 +12,7 @@
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_partition.h"
 #include "esp_pm.h"
 #include "esp_psram.h"
 #include "esp_system.h"
@@ -630,6 +631,26 @@ extern "C" void app_main(void) {
   profile.tailnet = hgp::TailnetLink::supported();
   profile.sd_log = board.sd.enabled;
 #endif
+
+  // Wisp's face art (wisp_face.bin, written to the "assets" partition over USB), mapped in place:
+  // the app checks it fully (hg::WispFace) and keeps Gadget's mascot when it is missing or damaged.
+  if (const esp_partition_t* assets =
+          esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "assets")) {
+    const void* map = nullptr;
+    esp_partition_mmap_handle_t handle;
+    if (esp_partition_mmap(assets, 0, assets->size, ESP_PARTITION_MMAP_DATA, &map, &handle) == ESP_OK) {
+      const auto* p = static_cast<const uint8_t*>(map);
+      const uint32_t size = p[36] | (p[37] << 8) | (p[38] << 16) | (static_cast<uint32_t>(p[39]) << 24);
+      if (std::memcmp(p, "WISPFACE", 8) == 0 && size >= 48 && size <= assets->size) {
+        profile.face_asset = p;  // mapped for the life of the program
+        profile.face_asset_size = size;
+        ESP_LOGI(TAG, "Wisp face art: %u bytes in the assets partition", static_cast<unsigned>(size));
+      } else {
+        esp_partition_munmap(handle);
+        ESP_LOGI(TAG, "no Wisp face art in the assets partition; the mascot stays");
+      }
+    }
+  }
 
 #if CONFIG_HG_BOARD_ESP32_CYD
   // From the heap, so the early framebuffer can take the one large contiguous

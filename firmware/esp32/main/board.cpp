@@ -334,7 +334,7 @@ BoardConfig make() {
   b.name = kBoardName;
   b.amoled.enabled = true;
   b.amoled.width = 368;
-  b.amoled.height = 432;    // as on V2: the UI stays 8 rows clear of the rounded corners
+  b.amoled.height = 448;    // the full glass: Wisp's face is laid out for all 448 rows
   b.amoled.cs = 12;
   b.amoled.sclk = 11;
   b.amoled.d0 = 4;
@@ -343,7 +343,7 @@ BoardConfig make() {
   b.amoled.d3 = 7;
   b.amoled.rst = -1;        // reset comes from the TCA9554 (LCD_RST, P0)
   b.amoled.gap_x = 0;       // the SH8601's RAM matches the 368-wide glass
-  b.amoled.gap_y = 8;       // the 8-row inset at the top
+  b.amoled.gap_y = 0;       // no inset (the bars keep their text clear of the corners)
   b.amoled.corner_inset = 18;  // the top bar's text clears the rounded corners
   b.amoled.panel = AmoledPanel::Sh8601_368;
   b.i2c = {15, 14, 400000};
@@ -362,7 +362,7 @@ BoardConfig make() {
   b.touch.int_gpio = 21;    // pulses low on a report; an idle FT3168 dozes and refuses polls
   b.touch.width = 368;
   b.touch.height = 448;
-  b.touch.offset_y = 8;     // touch reports glass rows; the UI starts at row 8
+  b.touch.offset_y = 0;     // touch rows are UI rows on the full glass
   // The side PWR key goes to the AXP2101; its conditioned level is on expander pin P4,
   // high while pressed, as on V2. It acts as CANCEL.
   b.pwr_key = {true, 0x20, 4, true};

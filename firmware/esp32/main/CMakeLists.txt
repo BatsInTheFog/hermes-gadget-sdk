@@ -94,6 +94,7 @@ idf_component_register(
         esp_driver_ledc
         esp_driver_dac
         esp_app_format
+        esp_partition
         esp_adc
         esp_event
         esp_lcd
