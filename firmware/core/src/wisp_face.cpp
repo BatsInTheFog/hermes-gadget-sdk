@@ -178,20 +178,6 @@ inline void blend(uint16_t& d, uint16_t c, int a) {
   d = static_cast<uint16_t>((r << 11) | (g << 5) | b);
 }
 
-// The pixel at (x, y) of a part's lit box, or 0.
-uint16_t part_pixel(const WispFace::Part& part, int x, int y) {
-  if (!part.block || y < 0 || y >= part.ch || x < 0 || x >= part.cw) return 0;
-  const uint8_t* p = part.block + u32(part.block + 4 * y);
-  const int spans = u16(p);
-  p += 2;
-  for (int s = 0; s < spans; ++s) {
-    const int sx0 = u16(p), n = u16(p + 2);
-    if (x >= sx0 && x < sx0 + n) return u16(p + 4 + 2 * (x - sx0));
-    p += 4 + 2 * n;
-  }
-  return 0;
-}
-
 void row_range(const FaceFrame& f, int& y0, int& y1) {
   y0 = f.y1 > f.y0 ? std::max(0, f.y0) : 0;
   y1 = f.y1 > f.y0 ? std::min(f.h, f.y1) : f.h;
@@ -275,17 +261,43 @@ void add_part_rotated(FaceFrame& f, const WispFace::Part& part, float px, float 
   const int y0 = std::max(fy0, static_cast<int>(std::floor(py + by0))), y1 = std::min(fy1, static_cast<int>(std::ceil(py + by1)));
   const int x0 = std::max(0, static_cast<int>(std::floor(px + bx0))), x1 = std::min(f.w, static_cast<int>(std::ceil(px + bx1)));
   const int a = std::min(alpha, 256);
+  const float isx = 1.0f / sx, isy = 1.0f / sy;
+  // Turned back into the part's lit box, in its pixels: one step per destination column.
+  const float dfx = c * isx, dfy = -s * isy;
+  constexpr float kBias = 4096.0f;  // keeps the values positive, so a cast floors them
   for (int dy = y0; dy < y1; ++dy) {
     uint16_t* out = f.px + static_cast<size_t>(dy) * f.w;
-    const float Y = dy + 0.5f - py;
-    for (int dx = x0; dx < x1; ++dx) {
-      const float X = dx + 0.5f - px;
-      const float u = c * X + s * Y, v = -s * X + c * Y;  // turned back
-      const int ix = static_cast<int>(std::floor((u - x) / sx)) - part.cx;
-      const int iy = static_cast<int>(std::floor((v - y) / sy)) - part.cy;
-      const uint16_t col = part_pixel(part, ix, iy);
-      if (col) blend(out[dx], col, a), f.touched(dy);
+    const float Y = dy + 0.5f - py, X0 = x0 + 0.5f - px;
+    float fx = (c * X0 + s * Y - x) * isx - part.cx + kBias;
+    float fy = (-s * X0 + c * Y - y) * isy - part.cy + kBias;
+    int row = -1;
+    const uint8_t* spans = nullptr;
+    int nspans = 0;
+    bool drew = false;
+    for (int dx = x0; dx < x1; ++dx, fx += dfx, fy += dfy) {
+      const int ix = static_cast<int>(fx) - static_cast<int>(kBias);
+      const int iy = static_cast<int>(fy) - static_cast<int>(kBias);
+      if (static_cast<unsigned>(iy) >= static_cast<unsigned>(part.ch) ||
+          static_cast<unsigned>(ix) >= static_cast<unsigned>(part.cw))
+        continue;
+      if (iy != row) {  // a new source row: find its spans once
+        row = iy;
+        spans = part.block + u32(part.block + 4 * iy);
+        nspans = u16(spans);
+        spans += 2;
+      }
+      const uint8_t* q = spans;
+      for (int k = 0; k < nspans; ++k) {
+        const int sx0 = u16(q), n = u16(q + 2);
+        if (ix >= sx0 && ix < sx0 + n) {
+          const uint16_t col = reinterpret_cast<const uint16_t*>(q + 4)[ix - sx0];
+          if (col) blend(out[dx], col, a), drew = true;
+          break;
+        }
+        q += 4 + 2 * n;
+      }
     }
+    if (drew) f.touched(dy);
   }
 }
 
@@ -733,6 +745,11 @@ void WispFaceRenderer::draw_pose(FaceFrame& f, const Pose& p, bool clear) const 
     const float sy = size * breathe * (1 - squash_ * up) * (1 + squash_ * 0.25f * dn);
     const float speed = flow_ * p.fl_speed;
     const int h = flame_.part->h;
+    // Its rows on screen; a mouth-lane band below them needs no flame at all.
+    const float top = fs * (base_y - flame_.ay * sy) + oy, bottom = fs * (base_y + (h - flame_.ay) * sy) + oy;
+    int cy0, cy1;
+    row_range(f, cy0, cy1);
+    if (bottom >= cy0 && top <= cy1) {
     for (int y = 0; y < h; ++y) {
       const float k = std::clamp(1 - y / std::max(flame_.ay, 1.0f), 0.0f, 1.0f), wgt = std::pow(k, 1.6f);
       // In face pixels under the face's scale: on screen, times fs.
@@ -743,6 +760,7 @@ void WispFaceRenderer::draw_pose(FaceFrame& f, const Pose& p, bool clear) const 
     }
     place(flame_, base_x - flame_.ax * sx, base_y - flame_.ay * sy, sx, sy, static_cast<int>(256 * bright),
           row_dx_.data());
+    }
   }
 
   // Eyes: move most; the near eye widens and the far one narrows as she turns.
