@@ -64,6 +64,12 @@ struct FaceFrame {
   uint16_t* px = nullptr;
   int w = 0, h = 0;
   int y0 = 0, y1 = 0;  // [y0, y1) is drawn; 0, 0 means every row
+  // The rows drawing wrote to, [dirty_y0, dirty_y1) (empty while dirty_y0 >= dirty_y1).
+  int dirty_y0 = 1 << 30, dirty_y1 = -(1 << 30);
+  void touched(int y) {
+    if (y < dirty_y0) dirty_y0 = y;
+    if (y + 1 > dirty_y1) dirty_y1 = y + 1;
+  }
 };
 
 // Adds `part` to the frame with its full-size top-left corner at (x, y), scaled by (sx, sy)
@@ -112,8 +118,11 @@ class WispFaceRenderer {
   void set_view(float scale, float eye_y) { view_scale_ = scale, view_eye_y_ = eye_y; }
   // Advances the animation by dt seconds (clamped to 50 ms, as the preview does).
   void step(float dt);
-  // Draws the current frame. Clears the frame's rows to black first.
+  // Draws the current frame. Clears to black first: only the rows the previous frame drew,
+  // when it is the same buffer (the rest is black already), else every row.
   void draw(FaceFrame& f) const;
+  // The rows the last draw() changed: what it drew now and what it cleared from before.
+  void changed_rows(int& y0, int& y1) const { y0 = changed_y0_, y1 = changed_y1_; }
   uint32_t frame() const { return frame_; }  // changes on every step
   float time() const { return pose_.t; }
   // The resting face at time t seconds: flame (swaying, breathing, pulsing), neutral eyes and
@@ -153,7 +162,7 @@ class WispFaceRenderer {
     float fl_size = 1, fl_bright = 1, fl_speed = 1;
   };
 
-  void draw_pose(FaceFrame& f, const Pose& p) const;
+  void draw_pose(FaceFrame& f, const Pose& p, bool clear) const;
   bool can_blink() const;
   void choose_gaze(float dt);
   float rand(float a, float b);
@@ -189,6 +198,9 @@ class WispFaceRenderer {
   int mouth_seen_ = -1, mouth_seen_side_ = 0, mouth_seen_n_ = 0;
   uint32_t rng_ = 1, frame_ = 0;
   mutable std::vector<float> row_dx_;  // the flame's per-row sway, reused each frame
+  // The previous draw(): its buffer and the rows it wrote, and the rows the last draw changed.
+  mutable const uint16_t* last_px_ = nullptr;
+  mutable int last_y0_ = 0, last_y1_ = 0, changed_y0_ = 0, changed_y1_ = 0;
 };
 
 }  // namespace hg

@@ -63,6 +63,9 @@ struct DeviceProfile {
   // board maps its assets partition, the simulator reads a file. Null: Gadget's mascot.
   const uint8_t* face_asset = nullptr;
   size_t face_asset_size = 0;
+  // While on, the port sends even small allocations to PSRAM (the face's metadata at start-up),
+  // sparing internal RAM. Null: no such choice.
+  void (*prefer_psram)(bool on) = nullptr;
   // The touchscreen's pixels per inch, so tap targets are about 7 mm tall; 0 assumes kDefaultTouchPpi.
   uint16_t touch_ppi = 0;
   static constexpr uint16_t kDefaultTouchPpi = 200;
@@ -905,7 +908,9 @@ class App {
   bool face_forced_ = false;  // the `face` console command chose the state
   WispState face_force_ = WispState::Idle;
   uint32_t face_at_ = 0;  // the face's last animation step
+  uint32_t face_cost_ms_ = 0;  // how long the last face frame took to step and draw
   static constexpr uint32_t kFaceFrameMs = 33;  // about 30 frames a second
+  static constexpr uint32_t kFaceClockFrameMs = 100;  // asleep on the resting clock: 10 a second
   static constexpr float kFaceClockScale = 0.62f;  // the resting clock's face, in the top half
   uint32_t face_success_until_ = 0, face_sad_until_ = 0;
   std::string turn_outcome_;  // the last turn.end's outcome

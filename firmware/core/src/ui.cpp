@@ -274,6 +274,7 @@ uint32_t hero_anim_key(const UiModel& m) {
     case Screen::Responding: h.val((m.frame / 2) % 3); break;
     default: break;
   }
+  if (m.wisp) h.val(m.wisp_frame);  // Wisp's face moves on its own clock
   return h.get();
 }
 
@@ -582,10 +583,18 @@ void Ui::draw_frame(const UiModel& m) {
   const int y_content = y_header + layout_.header_h;
   const int y_bottom = h - layout_.bottom_h;
 
+  // Wisp's face: compose this frame first, so each band knows whether the face changed under it.
+  int face_c0 = 0, face_c1 = 0;
+  if (m.wisp) {
+    ensure_wisp(m);
+    m.wisp->changed_rows(face_c0, face_c1);
+  }
+  const bool face_top = m.wisp && !m.chrome && face_c0 < layout_.top_h && face_c1 > 0;
+  const bool face_bottom = m.wisp && !m.chrome && face_c1 > h - layout_.bottom_h;
   // A rectangular top bar's line fills with the timer: its width in pixels, or -1 with no timer.
   const int top_fill = !panel_.round && m.timer_permille >= 0 ? info_.width * m.timer_permille / 1000 : -1;
   uint32_t hashes[4];
-  hashes[0] = Hash().val(m.chrome).val(m.wisp != nullptr).val(m.chrome ? 0u : m.wisp_frame).add(m.title).val(m.lang).val(m.link).val(panel_.round && m.screen == Screen::Settings).val(panel_.round && m.settings_hold)
+  hashes[0] = Hash().val(m.chrome).val(m.wisp != nullptr).val(face_top ? m.wisp_frame : 0u).add(m.title).val(m.lang).val(m.link).val(panel_.round && m.screen == Screen::Settings).val(panel_.round && m.settings_hold)
                   .val(panel_.round ? int8_t(-1) : m.battery).val(!panel_.round && m.battery_charging)
                   .val(!panel_.round && m.battery_icon).val(!panel_.round && m.battery_text)
                   .val(!panel_.round && m.battery_low).val(top_fill).get();
@@ -608,7 +617,7 @@ void Ui::draw_frame(const UiModel& m) {
     content.val(m.grid).val(m.face_row).val(m.mascot_row).val(m.settings_row).add(m.face ? m.face->hash : std::string())
         .val(m.thumbs_rev).val(m.thumbs.size());
   hashes[2] = content.get();
-  hashes[3] = Hash().val(m.chrome).val(m.wisp != nullptr).val(m.chrome ? 0u : m.wisp_frame).add(m.hint).get();
+  hashes[3] = Hash().val(m.chrome).val(m.wisp != nullptr).val(face_bottom ? m.wisp_frame : 0u).add(m.hint).get();
 
   if (m.hero) {
     // Hero mode: top bar, one mascot band, bottom bar.
@@ -618,7 +627,7 @@ void Ui::draw_frame(const UiModel& m) {
       draw_bands(y0, y1, i == 0 ? &Ui::draw_top : &Ui::draw_bottom, m);
       hash_[i] = hashes[i];
     }
-    uint32_t stat = Hash().val(m.screen).val(m.wisp != nullptr).val(m.wisp_frame).add(m.headline).add(m.detail).add(m.yes).add(m.no).val(m.caption_lines)
+    uint32_t stat = Hash().val(m.screen).val(m.wisp != nullptr).add(m.headline).add(m.detail).add(m.yes).add(m.no).val(m.caption_lines)
                         .val(m.name_target).add(m.face ? m.face->hash : std::string()).get();
     uint32_t anim = hero_anim_key(m);
     int y0 = y_header, y1 = y_bottom;
@@ -1543,6 +1552,15 @@ bool Ui::talk_caption_fits() const {
 }
 
 void Ui::hero_anim_rows(const UiModel& m, int& y0, int& y1) const {
+  if (m.wisp) {
+    // Wisp's face: the rows its last frame changed (draw_frame composed it first).
+    int c0, c1;
+    m.wisp->changed_rows(c0, c1);
+    y0 = std::max(c0, layout_.top_h);
+    y1 = std::min(c1, static_cast<int>(info_.height) - layout_.bottom_h);
+    if (y1 <= y0) y0 = y1 = layout_.top_h;
+    return;
+  }
   const HeroGeom g = hero_geom(m);
   const int size = g.size, my = g.y;
   const mascot::Anchors& a = mascot::anchors(m.face);

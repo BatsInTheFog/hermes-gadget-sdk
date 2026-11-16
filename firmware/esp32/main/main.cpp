@@ -644,6 +644,11 @@ extern "C" void app_main(void) {
       if (std::memcmp(p, "WISPFACE", 8) == 0 && size >= 48 && size <= assets->size) {
         profile.face_asset = p;  // mapped for the life of the program
         profile.face_asset_size = size;
+#if CONFIG_SPIRAM_USE_MALLOC
+        profile.prefer_psram = [](bool on) {
+          heap_caps_malloc_extmem_enable(on ? 0 : CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL);
+        };
+#endif
         ESP_LOGI(TAG, "Wisp face art: %u bytes in the assets partition", static_cast<unsigned>(size));
       } else {
         esp_partition_munmap(handle);

@@ -294,11 +294,14 @@ void App::begin() {
   device_id_ = proto::device_id_for_key(key_.data(), key_.size());
   if (profile_.face_asset) {
     std::string why;
+    // The parsed metadata is many small allocations: let the port put them in PSRAM.
+    if (profile_.prefer_psram) profile_.prefer_psram(true);
     if (wisp_face_.load(profile_.face_asset, profile_.face_asset_size, &why) && wisp_renderer_.begin(wisp_face_, &why))
       log(LogLevel::Info, "Wisp face loaded: " + std::to_string(wisp_face_.part_count()) + " parts");
     else
       log(LogLevel::Warn, "Wisp face not used (" + why + "); showing the mascot");
-    wisp_face_.drop_metadata();  // the renderer has what it needs; free the parsed JSON (internal RAM)
+    wisp_face_.drop_metadata();  // the renderer has what it needs; free the parsed JSON
+    if (profile_.prefer_psram) profile_.prefer_psram(false);
   }
   load_settings();
   agent_profile_ = setting("profile", "default");  // shown until Hermes confirms it; not a console setting
@@ -2561,11 +2564,15 @@ void App::tick() {
   }
   // Wisp's face animates at its own rate while it is on screen (only its rows are redrawn).
   if (model_.wisp && !display_sleeping_) {
-    if (t - face_at_ >= kFaceFrameMs) {
+    // At most every kFaceFrameMs, and never more than half the time: a frame that took long
+    // waits as long again, so audio, touch and the connection keep their share.
+    const uint32_t interval = model_.screen == Screen::Clock ? kFaceClockFrameMs : kFaceFrameMs;  // asleep: slower
+    if (t - face_at_ >= std::max(interval, 2 * face_cost_ms_)) {
       wisp_renderer_.step(static_cast<float>(t - face_at_) / 1000.0f);
       face_at_ = t;
       model_.wisp_frame = wisp_renderer_.frame();
       render(model_);
+      face_cost_ms_ = now() - t;
     }
   } else {
     face_at_ = t;

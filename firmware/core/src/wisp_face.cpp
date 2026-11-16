@@ -100,8 +100,11 @@ void add_part(FaceFrame& f, const WispFace::Part& part, float x, float y, float 
   const int ry0 = std::max(fy0, static_cast<int>(std::floor(y + part.cy * sy)));
   const int ry1 = std::min(fy1, static_cast<int>(std::ceil(y + (part.cy + part.ch) * sy)));
   const int a = std::min(alpha, 256);
+  const float inv_sx = 1.0f / sx, inv_sy = 1.0f / sy;
+  // Source columns step in 16.16 fixed point: one division per span, none per pixel.
+  const int32_t step = static_cast<int32_t>(inv_sx * 65536.0f + 0.5f);
   for (int dy = ry0; dy < ry1; ++dy) {
-    const int src_y = static_cast<int>(std::floor((dy + 0.5f - y) / sy));
+    const int src_y = static_cast<int>(std::floor((dy + 0.5f - y) * inv_sy));
     const int row = src_y - part.cy;
     if (row < 0 || row >= part.ch) continue;
     const uint8_t* p = part.block + u32(part.block + 4 * row);
@@ -109,6 +112,7 @@ void add_part(FaceFrame& f, const WispFace::Part& part, float x, float y, float 
     p += 2;
     const float shift = row_dx ? row_dx[src_y] : 0.0f;
     uint16_t* out = f.px + static_cast<size_t>(dy) * f.w;
+    bool drew = false;
     for (int s = 0; s < spans; ++s) {
       const int sx0 = part.cx + u16(p), n = u16(p + 2);
       const uint8_t* pix = p + 4;
@@ -117,8 +121,12 @@ void add_part(FaceFrame& f, const WispFace::Part& part, float x, float y, float 
       const float left = x + shift;
       const int dx0 = std::max(0, static_cast<int>(std::floor(left + sx0 * sx)));
       const int dx1 = std::min(f.w, static_cast<int>(std::ceil(left + (sx0 + n) * sx)));
-      for (int dx = dx0; dx < dx1; ++dx) {
-        const int src_x = static_cast<int>(std::floor((dx + 0.5f - left) / sx)) - sx0;
+      if (dx0 >= dx1) continue;
+      drew = true;
+      // The source column under dx0's centre, then one step per destination column.
+      int32_t pos = static_cast<int32_t>(std::floor(((dx0 + 0.5f - left) * inv_sx - sx0) * 65536.0f));
+      for (int dx = dx0; dx < dx1; ++dx, pos += step) {
+        const int src_x = pos >> 16;  // arithmetic shift: floors negatives too
         if (src_x < 0 || src_x >= n) continue;
         const uint16_t c = u16(pix + 2 * src_x);
         if (!c) continue;
@@ -135,6 +143,7 @@ void add_part(FaceFrame& f, const WispFace::Part& part, float x, float y, float 
         out[dx] = static_cast<uint16_t>((r << 11) | (g << 5) | b);
       }
     }
+    if (drew) f.touched(dy);
   }
 }
 
@@ -201,6 +210,7 @@ void add_disc(FaceFrame& f, float cx, float cy, float r, uint16_t c, int alpha) 
     const int x1 = std::min(f.w, static_cast<int>(std::floor(cx + w + 0.5f)));
     uint16_t* out = f.px + static_cast<size_t>(y) * f.w;
     for (int x = x0; x < x1; ++x) blend(out[x], c, alpha);
+    if (x1 > x0) f.touched(y);
   }
 }
 
@@ -273,7 +283,7 @@ void add_part_rotated(FaceFrame& f, const WispFace::Part& part, float px, float 
       const int ix = static_cast<int>(std::floor((u - x) / sx)) - part.cx;
       const int iy = static_cast<int>(std::floor((v - y) / sy)) - part.cy;
       const uint16_t col = part_pixel(part, ix, iy);
-      if (col) blend(out[dx], col, a);
+      if (col) blend(out[dx], col, a), f.touched(dy);
     }
   }
 }
@@ -591,19 +601,38 @@ void WispFaceRenderer::step(float dt) {
   ++frame_;
 }
 
-void WispFaceRenderer::draw(FaceFrame& f) const { draw_pose(f, pose_); }
+void WispFaceRenderer::draw(FaceFrame& f) const {
+  if (!face_ || !f.px) return;
+  int y0, y1;
+  row_range(f, y0, y1);
+  // Clear what the previous frame drew (the rest is black already), or everything on a new buffer.
+  int c0 = y0, c1 = y1;
+  if (f.px == last_px_) c0 = std::max(y0, last_y0_), c1 = std::min(y1, last_y1_);
+  if (c1 > c0) std::memset(f.px + static_cast<size_t>(c0) * f.w, 0, static_cast<size_t>(c1 - c0) * f.w * 2);
+  FaceFrame g = f;
+  g.y0 = y0, g.y1 = y1;
+  draw_pose(g, pose_, false);
+  const int d0 = g.dirty_y0, d1 = g.dirty_y1;
+  changed_y0_ = f.px == last_px_ ? std::min(d0, last_y0_) : y0;
+  changed_y1_ = f.px == last_px_ ? std::max(d1, last_y1_) : y1;
+  if (changed_y1_ < changed_y0_) changed_y0_ = changed_y1_ = 0;
+  last_px_ = f.px;
+  last_y0_ = d0 < d1 ? d0 : 0;
+  last_y1_ = d0 < d1 ? d1 : 0;
+  f.dirty_y0 = d0, f.dirty_y1 = d1;
+}
 
 void WispFaceRenderer::draw_idle(FaceFrame& f, float t) const {
   Pose p;
   p.t = t;
-  draw_pose(f, p);
+  draw_pose(f, p, true);
 }
 
-void WispFaceRenderer::draw_pose(FaceFrame& f, const Pose& p) const {
+void WispFaceRenderer::draw_pose(FaceFrame& f, const Pose& p, bool clear) const {
   if (!face_ || !f.px) return;
   int y0, y1;
   row_range(f, y0, y1);
-  if (y1 > y0) std::memset(f.px + static_cast<size_t>(y0) * f.w, 0, static_cast<size_t>(y1 - y0) * f.w * 2);
+  if (clear && y1 > y0) std::memset(f.px + static_cast<size_t>(y0) * f.w, 0, static_cast<size_t>(y1 - y0) * f.w * 2);
   const StateLook& look = looks_[static_cast<int>(state_)];
   const float t = p.t, D = glance_;
   const float breath = breath_ * std::sin(t * (state_ == WispState::Sleepy ? 0.9f : 1.6f));
