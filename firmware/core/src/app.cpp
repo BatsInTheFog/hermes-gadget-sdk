@@ -1148,6 +1148,16 @@ void App::wisp_model(UiModel& m) {
   m.wisp_frame = wisp_renderer_.frame();
 }
 
+std::string App::wisp_timing_json() const {
+  if (!ui_) return {};
+  const Ui::WispTiming& w = ui_->wisp_timing();
+  auto avg = [](uint64_t us, uint32_t n) { return n ? std::to_string((us + n / 2) / n) : std::string("0"); };
+  return ",\"timing\":{\"compose_us\":" + avg(w.compose_us, w.composes) + ",\"copy_us\":" + avg(w.copy_us, w.copies) +
+         ",\"copy_rows\":" + avg(w.copy_rows, w.copies) + ",\"text_us\":" + avg(w.text_us, w.texts) +
+         ",\"composes\":" + std::to_string(w.composes) + ",\"full_bands\":" + std::to_string(w.full_bands) +
+         ",\"row_bands\":" + std::to_string(w.row_bands) + "}";
+}
+
 void App::reveal_bars() {
   if (!profile_.autohide_bars) return;
   bars_until_ = now() + kBarsShowMs;
@@ -3213,8 +3223,12 @@ std::string App::console(std::string_view raw) {
     if (rest.empty())
       return std::string("@face {\"state\":\"") + wisp_state_name(wisp_renderer_.state()) + "\",\"forced\":" +
              (face_forced_ ? "true" : "false") + ",\"full_frames\":" + std::to_string(face_full_frames_) +
-             ",\"mouth_frames\":" + std::to_string(face_mouth_frames_) + "}";
+             ",\"mouth_frames\":" + std::to_string(face_mouth_frames_) + wisp_timing_json() + "}";
     WispState s;
+    if (rest == "timing reset") {
+      if (ui_) ui_->reset_wisp_timing();
+      return "@ok face timing reset";
+    }
     if (rest == "auto") face_forced_ = false;
     else if (wisp_state_from(rest, s)) face_forced_ = true, face_force_ = s;
     else return "@error usage: face [auto | idle | listening | thinking | research | notes | speaking | success | sad | "

@@ -636,6 +636,7 @@ void Ui::draw_frame(const UiModel& m) {
       hero_anim_rows(m, y0, y1);  // only what can move
       redraw = true;
     }
+    if (redraw && m.wisp) ++(y0 == y_header && y1 == y_bottom ? wisp_timing_.full_bands : wisp_timing_.row_bands);
     if (redraw) draw_bands(y0, y1, &Ui::draw_hero, m);
     hero_static_ = stat;
     hero_anim_ = anim;
@@ -1619,14 +1620,21 @@ void Ui::ensure_wisp(const UiModel& m) {
   }
   if (wisp_from_ == m.wisp && wisp_frame_ == m.wisp_frame) return;  // composed once per face frame
   FaceFrame f{wisp_fb_.data(), info_.width, info_.height, 0, 0};
+  const uint64_t t0 = clock_ ? clock_->now_us() : 0;
   m.wisp->draw(f);
+  if (clock_) wisp_timing_.compose_us += clock_->now_us() - t0, ++wisp_timing_.composes;
   wisp_from_ = m.wisp;
   wisp_frame_ = m.wisp_frame;
 }
 
 void Ui::blit_wisp(Canvas& c, int y0, int y1) {
   if (wisp_fb_.empty() || y1 <= y0) return;
+  // Only the rows this band's canvas holds and its clip allows.
+  y0 = std::max(y0, c.clip_y0()), y1 = std::min(y1, c.clip_y1());
+  if (y1 <= y0) return;
+  const uint64_t t0 = clock_ ? clock_->now_us() : 0;
   c.blit(0, y0, info_.width, y1 - y0, wisp_fb_.data() + static_cast<size_t>(y0) * info_.width);
+  if (clock_) wisp_timing_.copy_us += clock_->now_us() - t0, ++wisp_timing_.copies, wisp_timing_.copy_rows += y1 - y0;
 }
 
 void Ui::draw_hero(Canvas& c, const UiModel& m) {
@@ -1641,6 +1649,7 @@ void Ui::draw_hero(Canvas& c, const UiModel& m) {
     blit_wisp(c, y0, y1);
     // With a headline: it, then the detail's first line. Without one (a spoken reply's latest
     // lines): the detail's first two lines.
+    const uint64_t t_text = clock_ ? clock_->now_us() : 0;
     const int cols = layout_.hero_cols;
     const int ty = wisp_text_top();
     std::vector<std::pair<std::string, uint16_t>> lines;
@@ -1656,6 +1665,7 @@ void Ui::draw_hero(Canvas& c, const UiModel& m) {
       const std::string t = fit(lines[i].first, cols);
       c.text((w - Canvas::text_width(t, s)) / 2, ty + static_cast<int>(i) * lh, t, s, lines[i].second);
     }
+    if (clock_) wisp_timing_.text_us += clock_->now_us() - t_text, ++wisp_timing_.texts;
     return;
   }
   c.fill_rect(0, y0, w, y1 - y0, bg_);

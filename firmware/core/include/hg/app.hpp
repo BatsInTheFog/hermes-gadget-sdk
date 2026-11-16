@@ -938,6 +938,7 @@ private:
   uint32_t face_success_until_ = 0, face_sad_until_ = 0;
   std::string turn_outcome_;  // the last turn.end's outcome
   void wisp_model(UiModel& m);
+  std::string wisp_timing_json() const;
   uint32_t frame_log_at_ = 0, frame_log_frames_ = 0;
   enum class Bench : uint8_t { None, Scroll, Mascot, Redraw, Settings };
   Bench bench_ = Bench::None, bench_last_ = Bench::None;  // running; the last one to run of `perf bench all`
