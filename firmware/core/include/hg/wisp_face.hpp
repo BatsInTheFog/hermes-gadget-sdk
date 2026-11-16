@@ -174,7 +174,8 @@ class WispFaceRenderer {
   void choose_gaze(float dt);
   void step_once(float dt);
   void update_mouth();
-  void mouth_band(int frame_w, int& y0, int& y1) const;
+  // The rows the mouth drawing for this pose covers (with room for its tilt).
+  void mouth_rows(int& y0, int& y1) const;
   float rand(float a, float b);
 
   const WispFace* face_ = nullptr;
@@ -211,7 +212,7 @@ class WispFaceRenderer {
   // The previous draw(): its buffer and the rows it wrote, and the rows the last draw changed.
   mutable const uint16_t* last_px_ = nullptr;
   bool mouth_only_ = false;  // the last step was step_mouth(): draw() redraws the mouth band
-  float max_mouth_h_ = 0;    // the tallest mouth drawing (rows), for the mouth band
+  mutable int mouth_y0_ = 0, mouth_y1_ = 0;  // the rows the last drawn mouth covered
   mutable int last_y0_ = 0, last_y1_ = 0, changed_y0_ = 0, changed_y1_ = 0;
 };
 

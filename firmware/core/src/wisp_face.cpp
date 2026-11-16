@@ -317,12 +317,6 @@ bool WispFaceRenderer::begin(const WispFace& face, std::string* error, uint32_t 
     for (size_t k = 0; k < l["left"].size(); ++k) lad.left.push_back(entry(l["left"][k]));
     ladders_.push_back(std::move(lad));
   }
-  max_mouth_h_ = 0;
-  for (const Ladder& l : ladders_) {
-    for (const Entry* e : {&l.fwd}) max_mouth_h_ = std::max<float>(max_mouth_h_, e->part->h);
-    for (const Entry& e : l.right) if (e.part) max_mouth_h_ = std::max<float>(max_mouth_h_, e.part->h);
-    for (const Entry& e : l.left) if (e.part) max_mouth_h_ = std::max<float>(max_mouth_h_, e.part->h);
-  }
   flame_ = entry(m["flame"]);
   if (eyes_l_.empty() || ladders_.empty() || !flame_.part) return fail(error, "face file lacks the idle parts");
   const char* prop_names[3] = {"browser", "quill", "mic"};
@@ -632,9 +626,15 @@ void WispFaceRenderer::step_mouth() {
   ++frame_;
 }
 
-void WispFaceRenderer::mouth_band(int frame_w, int& y0, int& y1) const {
-  // Where draw_pose puts the mouth's centre row for this pose, and room for its tallest drawing.
+void WispFaceRenderer::mouth_rows(int& y0, int& y1) const {
+  // Where draw_pose puts the mouth for this pose: its drawing's rows about its anchor, scaled,
+  // plus room for the tilt (up to mouth_rot_ degrees across its width).
   const Pose& p = pose_;
+  const Ladder& lad = ladders_[std::clamp(p.mouth, 0, static_cast<int>(ladders_.size()) - 1)];
+  const auto& turns = p.mouth_side > 0 ? lad.right : lad.left;
+  const int n = 1 + static_cast<int>(turn_mouths_ ? std::min<size_t>(turns.size(), 2) : 0);
+  const int k = std::clamp(p.mouth_step, 0, n - 1);
+  const Entry& e = k == 0 ? lad.fwd : turns[k - 1];
   const float D = glance_, fs = face_size_ * view_scale_;
   const float breath = breath_ * std::sin(p.t * (state_ == WispState::Sleepy ? 0.9f : 1.6f));
   const float eye_line = view_eye_y_ >= 0 ? view_eye_y_ : eye_line_;
@@ -643,10 +643,11 @@ void WispFaceRenderer::mouth_band(int frame_w, int& y0, int& y1) const {
   const float lift = std::min(0.0f, p.gaze_y) * D * up_lift_;
   const float my = mouth_y_ + p.gaze_y * D * mouth_depth_ * 0.6f + lift * 0.85f - tilt * (mouth_y_ - eye_cy_) * 0.9f +
                    breath * 0.8f;
-  const float cy = fs * my + oy, reach = max_mouth_h_ * mouth_scale_ * fs + 6;
-  (void)frame_w;
-  y0 = static_cast<int>(std::floor(cy - reach));
-  y1 = static_cast<int>(std::ceil(cy + reach));
+  const float cy = fs * my + oy, msy = mouth_scale_ * (1 - tilt * 0.6f) * fs;
+  const float tilt_room = e.part ? e.part->w * mouth_scale_ * fs * std::sin(mouth_rot_ * kPi / 180) / 2 + 2 : 2;
+  const float top = e.part ? cy - e.ay * msy : cy, bottom = e.part ? cy + (e.part->h - e.ay) * msy : cy;
+  y0 = static_cast<int>(std::floor(top - tilt_room));
+  y1 = static_cast<int>(std::ceil(bottom + tilt_room));
 }
 
 void WispFaceRenderer::draw(FaceFrame& f) const {
@@ -657,7 +658,8 @@ void WispFaceRenderer::draw(FaceFrame& f) const {
     // The mouth lane: clear and redraw only the mouth's band, everything in it exactly as the
     // last full step placed it, then send just those rows.
     int b0, b1;
-    mouth_band(f.w, b0, b1);
+    mouth_rows(b0, b1);
+    b0 = std::min(b0, mouth_y0_), b1 = std::max(b1, mouth_y1_);  // and where the last mouth was
     b0 = std::max(b0, y0), b1 = std::min(b1, y1);
     if (b1 > b0) {
       std::memset(f.px + static_cast<size_t>(b0) * f.w, 0, static_cast<size_t>(b1 - b0) * f.w * 2);
@@ -666,6 +668,7 @@ void WispFaceRenderer::draw(FaceFrame& f) const {
       draw_pose(g, pose_, false);
       last_y0_ = std::min(last_y0_, b0), last_y1_ = std::max(last_y1_, b1);
     }
+    mouth_rows(mouth_y0_, mouth_y1_);
     changed_y0_ = b0, changed_y1_ = std::max(b0, b1);
     return;
   }
@@ -676,6 +679,7 @@ void WispFaceRenderer::draw(FaceFrame& f) const {
   FaceFrame g = f;
   g.y0 = y0, g.y1 = y1;
   draw_pose(g, pose_, false);
+  mouth_rows(mouth_y0_, mouth_y1_);
   const int d0 = g.dirty_y0, d1 = g.dirty_y1;
   changed_y0_ = f.px == last_px_ ? std::min(d0, last_y0_) : y0;
   changed_y1_ = f.px == last_px_ ? std::max(d1, last_y1_) : y1;
