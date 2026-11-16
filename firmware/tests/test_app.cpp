@@ -1744,6 +1744,42 @@ TEST("touch: hold to talk, lift to send") {
   CHECK(r.fake.last("audio.end") != nullptr);
 }
 
+TEST("touch: a swipe up brings the last reply back; a short or sideways one doesn't") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  r.server(R"({"type":"turn.start","turn":"t"})");
+  r.server(R"({"type":"reply","turn":"t","text":"Here is the answer."})");
+  r.server(R"({"type":"turn.end","turn":"t","outcome":"success"})");
+  r.advance(200);
+  CHECK_EQ(r.app.model().body, std::string("Here is the answer."));
+  r.server(R"({"type":"ping","ts":1})");
+  r.advance(21000);
+  CHECK(r.app.model().hero);  // the mascot is back
+  hg::TouchGestures touch(r.app);
+
+  // Too short a swipe up: nothing, and no recording.
+  touch.update(true, 200, 300, r.fake.clock);
+  touch.update(true, 200, 270, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.model().hero);
+  CHECK(!r.fake.mic_on);
+
+  // Mostly sideways: nothing.
+  touch.update(true, 100, 300, r.fake.clock);
+  touch.update(true, 220, 250, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.model().hero);
+
+  // A clear swipe up: the reply comes back, and nothing records.
+  touch.update(true, 200, 300, r.fake.clock);
+  touch.update(true, 202, 250, r.fake.clock);
+  touch.update(true, 204, 200, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.app.model().hero);
+  CHECK_EQ(r.app.model().body, std::string("Here is the answer."));
+  CHECK(!r.fake.mic_on);
+}
+
 TEST("touch: with touch_wake off, a dark screen ignores the touchscreen until a key lights it") {
   hg::DeviceProfile p = Rig::touch_profile();
   p.wake_key = true;

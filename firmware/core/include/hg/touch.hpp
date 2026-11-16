@@ -12,6 +12,9 @@
 //                      when it starts on it), a tap changes the row under it; with a
 //                      hardware check running, a tap and a swipe down are TALK and CANCEL
 //   swipe down         a CANCEL press and release (discard, close, stop, "no")
+//   swipe up           a DOWN press and release: on Ready it brings the last reply
+//                      back, and further swipes page through it (for boards with no
+//                      scroll keys)
 //
 // With the touch_talk setting off, holds and taps press TALK only where it doesn't
 // record (settings, a question, a ringing alarm); elsewhere they do nothing, and the
@@ -49,7 +52,7 @@ class TouchGestures {
   void tick(uint32_t now_ms);
 
  private:
-  enum class State : uint8_t { Idle, Pending, Settings, Picker, PickerDrag, Side, List, ListDrag, Camera, Talk, Swipe, Ignored };
+  enum class State : uint8_t { Idle, Pending, Settings, Picker, PickerDrag, Side, List, ListDrag, Camera, Talk, Swipe, Up, Ignored };
   void press(Button b);
   void release(Button b);
 

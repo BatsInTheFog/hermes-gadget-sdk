@@ -7,6 +7,7 @@ Wait for the device to show Ready. On the LCD board, BOOT is TALK and PLUS is CA
 | Ask a question | Hold TALK, speak, and release to send |
 | Interrupt a spoken reply | Hold TALK to start speaking |
 | Read a spoken reply in full before it ends | Tap the screen, or press Up or Down |
+| Bring the last reply back after the mascot returns, and page through it | Press Up or Down; on a touchscreen, swipe up |
 | Discard a recording, close a card, or stop a turn | Tap CANCEL |
 | Start a fresh conversation | Hold CANCEL for two seconds |
 | Open or close the [dashboard](#watch-hermes-sessions-on-the-dashboard) | Tap CANCEL on the idle screen |

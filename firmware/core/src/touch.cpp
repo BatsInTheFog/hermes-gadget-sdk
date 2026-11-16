@@ -53,6 +53,12 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
           else if (dx_ < 0) app_.open_profile_picker();  // from right to left, as the grid's next page
         }
         break;
+      case State::Up:  // an upward swipe: travel enough, and more up than sideways
+        if (-dy_ >= cfg_.swipe_px && std::abs(dx_) < -dy_) {
+          press(Button::Down);
+          release(Button::Down);
+        }
+        break;
       case State::Talk: release(Button::Talk); break;
       case State::Swipe: release(Button::Cancel); break;
       default: break;
@@ -117,6 +123,7 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
       }
       break;
     case State::Side:
+    case State::Up:
       dx_ = dx, dy_ = dy;
       break;
     case State::Settings:
@@ -139,6 +146,10 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
         if (dx < 0 && std::abs(dx) >= std::abs(dy) && !from_clock_ && app_.profile_swipe_opens()) {
           state_ = State::Side;
           in_picker_ = false;
+          dx_ = dx, dy_ = dy;
+        } else if (dy < 0 && std::abs(dx) < -dy && !from_clock_) {
+          // Moving up: an upward swipe if it travels far enough by the lift.
+          state_ = State::Up;
           dx_ = dx, dy_ = dy;
         } else if (dy < 0 || std::abs(dx) >= std::abs(dy)) {
           state_ = State::Ignored;
