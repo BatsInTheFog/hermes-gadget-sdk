@@ -1,5 +1,6 @@
 // Wisp's face file (hg/wisp_face.hpp): reading wisp_face.bin and drawing parts additively.
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -243,4 +244,138 @@ TEST("wisp face: the renderer needs the idle parts, then draws the face and clea
   CHECK_EQ(fr.at(44, 39), uint16_t(0x07E0));
   CHECK_EQ(fr.at(32, 50), uint16_t(0xF800));
   CHECK_EQ(fr.at(32, 29), uint16_t(0x001F));
+}
+
+namespace {
+
+// A small face with three eye drawings (blinks use 1 and 2), one mouth ladder with turns,
+// a flame and a two-frame mic, laid out on a 64x64 screen.
+struct SmallFace {
+  std::vector<uint8_t> file;
+  hg::WispFace face;
+  hg::WispFaceRenderer r;
+  SmallFace(const std::string& tuning = R"("breath":0,"sway":0,"pulse":0)") {
+    const std::string meta = std::string(R"({"manifest":{"screen":[64,64],
+      "layout":{"eyeL":[20,40],"eyeR":[44,40],"mouth":[32,50],"flame":[32,30]},
+      "eyes":[{"L":{"file":"e0.png","ax":2,"ay":4},"R":{"file":"e0.png","ax":2,"ay":4}},
+              {"L":{"file":"e1.png","ax":2,"ay":4},"R":{"file":"e1.png","ax":2,"ay":4}},
+              {"L":{"file":"e2.png","ax":2,"ay":4},"R":{"file":"e2.png","ax":2,"ay":4}}],
+      "mouthLadders":[{"name":"Closed","fwd":{"file":"m.png","ax":2,"ay":1},
+                       "right":[{"file":"mr.png","ax":2,"ay":1}],"left":[{"file":"ml.png","ax":2,"ay":1}]}],
+      "flame":{"file":"fl.png","ax":2,"ay":8},
+      "props":{"mic":[{"file":"mic0.png","ax":1,"ay":1},{"file":"mic1.png","ax":1,"ay":1}]}},
+      "spec":{"blink":{"halfEyes":1,"closedEyes":2},"tuning":{"eyeLine":38,"glance":4,)") + tuning + R"(},
+        "states":{"listening":{"eyes":0,"mouth":0,"prop":"mic"},"sleepy":{"eyes":0,"mouth":0}}}})";
+    file = make_file({dot_part("e0", 4, 4, 2, 3, 0x07E0), dot_part("e1", 4, 4, 2, 2, 0x07E0),
+                      dot_part("e2", 4, 4, 2, 1, 0x07E0), dot_part("m", 4, 2, 2, 1, 0xF800),
+                      dot_part("mr", 4, 2, 3, 1, 0xF800), dot_part("ml", 4, 2, 1, 1, 0xF800),
+                      dot_part("fl", 4, 8, 2, 7, 0x001F), dot_part("mic0", 2, 2, 0, 0, 0x0010),
+                      dot_part("mic1", 2, 2, 1, 1, 0x0010)},
+                     meta);
+    CHECK(face.load(file.data(), file.size()));
+    CHECK(r.begin(face, nullptr, 7));
+  }
+};
+
+}  // namespace
+
+TEST("wisp face: state names round-trip, and unknown names are refused") {
+  for (int i = 0; i < static_cast<int>(hg::WispState::Count); ++i) {
+    hg::WispState s;
+    CHECK(hg::wisp_state_from(hg::wisp_state_name(static_cast<hg::WispState>(i)), s));
+    CHECK(static_cast<int>(s) == i);
+  }
+  hg::WispState s;
+  CHECK(!hg::wisp_state_from("grumpy", s));
+}
+
+TEST("wisp face: the animation runs: time, frames, wandering gaze and blinks") {
+  SmallFace sf;
+  const uint32_t f0 = sf.r.frame();
+  bool moved = false, blinked = false, half = false;
+  for (int i = 0; i < 30 * 12; ++i) {  // 12 seconds at 30 frames a second
+    sf.r.step(1.0f / 30);
+    moved = moved || std::abs(sf.r.pose().gaze_x) > 0.15f;
+    blinked = blinked || sf.r.pose().blink_eye == 2;
+    half = half || sf.r.pose().blink_eye == 1;
+  }
+  CHECK(sf.r.frame() == f0 + 360);
+  CHECK(sf.r.time() > 11.9f && sf.r.time() < 12.1f);
+  CHECK(moved);
+  CHECK(blinked && half);  // a blink shows the half, then the closed drawing
+  sf.r.step(5);            // a long gap counts as 50 ms, as in the preview
+  CHECK(sf.r.time() < 12.2f);
+}
+
+TEST("wisp face: asleep, she doesn't blink and her flame dims and slows") {
+  SmallFace sf;
+  sf.r.set_state(hg::WispState::Sleepy);
+  CHECK(sf.r.state() == hg::WispState::Sleepy);
+  for (int i = 0; i < 30 * 10; ++i) {
+    sf.r.step(1.0f / 30);
+    CHECK(sf.r.pose().blink_eye < 0);
+  }
+  CHECK(sf.r.pose().fl_bright < 0.5f);
+  CHECK(sf.r.pose().fl_speed < 0.5f);
+  CHECK(sf.r.pose().gaze_y > 0.2f);  // eyes rest low
+}
+
+TEST("wisp face: listening shows the mic, following the microphone level") {
+  SmallFace sf;
+  sf.r.set_state(hg::WispState::Listening);
+  sf.r.set_mic_level(1.0f);
+  for (int i = 0; i < 30; ++i) sf.r.step(1.0f / 30);
+  CHECK(sf.r.pose().prop == 2);
+  CHECK(sf.r.pose().prop_alpha > 0.9f);
+  CHECK(sf.r.pose().mic_level > 0.9f);  // a fast rise
+  sf.r.set_mic_level(0.0f);
+  for (int i = 0; i < 3; ++i) sf.r.step(1.0f / 30);
+  CHECK(sf.r.pose().mic_level > 0.4f);  // a slower fall
+  for (int i = 0; i < 30; ++i) sf.r.step(1.0f / 30);
+  CHECK(sf.r.pose().mic_level < 0.05f);
+  sf.r.set_state(hg::WispState::Idle);
+  for (int i = 0; i < 30; ++i) sf.r.step(1.0f / 30);
+  CHECK(sf.r.pose().prop_alpha < 0.05f);  // fades out
+}
+
+TEST("wisp face: speaking moves the mouth with the voice's loudness") {
+  SmallFace sf;
+  sf.r.set_state(hg::WispState::Speaking);
+  sf.r.set_talk_level(0.9f);
+  sf.r.step(1.0f / 30);
+  CHECK(sf.r.pose().talk_amp > 0.85f);
+  sf.r.set_talk_level(0.0f);
+  sf.r.step(1.0f / 30);
+  CHECK(sf.r.pose().talk_amp < 0.01f);
+  CHECK(sf.r.pose().mouth == 0);  // quiet: the closed mouth (the only ladder here)
+}
+
+TEST("wisp face: a frame is drawn from the pose and stays inside the frame") {
+  SmallFace sf("\"breath\":2,\"sway\":9,\"pulse\":0.25");
+  sf.r.set_state(hg::WispState::Listening);
+  std::vector<uint16_t> px(64 * 64, 0xFFFF);
+  for (int i = 0; i < 90; ++i) {
+    sf.r.step(1.0f / 30);
+    hg::FaceFrame f{px.data(), 64, 64, 0, 0};
+    sf.r.draw(f);
+    int lit = 0;
+    for (uint16_t c : px) lit += c != 0;
+    CHECK(lit >= 1);   // the face is drawn (1-pixel test parts can vanish when an eye narrows)
+    CHECK(lit < 200);  // and the old white frame was cleared
+  }
+}
+
+TEST("wisp face: a part turned about a pivot lands where the rotation puts it") {
+  auto file = make_file({dot_part("p", 1, 1, 0, 0, 0xFFFF)}, kMeta);
+  hg::WispFace face;
+  CHECK(face.load(file.data(), file.size()));
+  Frame fr;
+  // The pixel's centre sits 10.5 px right of the pivot (20, 20); a quarter turn (clockwise on
+  // screen, y down) puts it 10.5 px below: the pixel whose centre is (20.5, 30.5).
+  hg::add_part_rotated(fr.f, *face.part("p"), 20, 20, 10, -0.5f, 1, 1, 1.5707963f);
+  CHECK_EQ(fr.at(20, 30), uint16_t(0xFFFF));
+  CHECK_EQ(fr.lit(), 1);
+  Frame flat;  // no turn: exactly as add_part
+  hg::add_part_rotated(flat.f, *face.part("p"), 20, 20, 3, 4, 1, 1, 0);
+  CHECK_EQ(flat.at(23, 24), uint16_t(0xFFFF));
 }

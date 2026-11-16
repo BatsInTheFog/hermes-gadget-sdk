@@ -107,6 +107,7 @@ struct UiModel {
   // Hero screens: Wisp's face drawn over the whole panel instead of the mascot, with the
   // headline and the first detail line near the bottom. Borrowed from the app; null: mascot.
   const WispFaceRenderer* wisp = nullptr;
+  uint32_t wisp_frame = 0;  // changes whenever the face moved
   std::string yes, no;   // answer buttons under the hero caption (Prompt screen)
   // Show the mascot as large as fits, with headline/detail as a caption,
   // instead of the header + text layout.
@@ -334,6 +335,7 @@ class Ui {
   // Wisp's face, composed for the whole panel (native RGB565), and what it was composed from.
   std::vector<uint16_t> wisp_fb_;
   const WispFaceRenderer* wisp_from_ = nullptr;
+  uint32_t wisp_frame_ = 0;
   void ensure_wisp(const UiModel& m);
   void blit_wisp(Canvas& c, int y0, int y1);
   int ox_ = 0, oy_ = 0;  // area origin on the panel

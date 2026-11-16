@@ -900,6 +900,10 @@ class App {
   // Wisp's face, from DeviceProfile::face_asset; the renderer is ready only when the file loaded.
   WispFace wisp_face_;
   WispFaceRenderer wisp_renderer_;
+  bool face_forced_ = false;  // the `face` console command chose the state
+  WispState face_force_ = WispState::Idle;
+  uint32_t face_at_ = 0;  // the face's last animation step
+  static constexpr uint32_t kFaceFrameMs = 33;  // about 30 frames a second
   uint32_t frame_log_at_ = 0, frame_log_frames_ = 0;
   enum class Bench : uint8_t { None, Scroll, Mascot, Redraw, Settings };
   Bench bench_ = Bench::None, bench_last_ = Bench::None;  // running; the last one to run of `perf bench all`

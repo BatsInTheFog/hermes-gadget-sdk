@@ -585,7 +585,7 @@ void Ui::draw_frame(const UiModel& m) {
   // A rectangular top bar's line fills with the timer: its width in pixels, or -1 with no timer.
   const int top_fill = !panel_.round && m.timer_permille >= 0 ? info_.width * m.timer_permille / 1000 : -1;
   uint32_t hashes[4];
-  hashes[0] = Hash().val(m.chrome).val(m.wisp != nullptr).add(m.title).val(m.lang).val(m.link).val(panel_.round && m.screen == Screen::Settings).val(panel_.round && m.settings_hold)
+  hashes[0] = Hash().val(m.chrome).val(m.wisp != nullptr).val(m.chrome ? 0u : m.wisp_frame).add(m.title).val(m.lang).val(m.link).val(panel_.round && m.screen == Screen::Settings).val(panel_.round && m.settings_hold)
                   .val(panel_.round ? int8_t(-1) : m.battery).val(!panel_.round && m.battery_charging)
                   .val(!panel_.round && m.battery_icon).val(!panel_.round && m.battery_text)
                   .val(!panel_.round && m.battery_low).val(top_fill).get();
@@ -608,7 +608,7 @@ void Ui::draw_frame(const UiModel& m) {
     content.val(m.grid).val(m.face_row).val(m.mascot_row).val(m.settings_row).add(m.face ? m.face->hash : std::string())
         .val(m.thumbs_rev).val(m.thumbs.size());
   hashes[2] = content.get();
-  hashes[3] = Hash().val(m.chrome).val(m.wisp != nullptr).add(m.hint).get();
+  hashes[3] = Hash().val(m.chrome).val(m.wisp != nullptr).val(m.chrome ? 0u : m.wisp_frame).add(m.hint).get();
 
   if (m.hero) {
     // Hero mode: top bar, one mascot band, bottom bar.
@@ -618,7 +618,7 @@ void Ui::draw_frame(const UiModel& m) {
       draw_bands(y0, y1, i == 0 ? &Ui::draw_top : &Ui::draw_bottom, m);
       hash_[i] = hashes[i];
     }
-    uint32_t stat = Hash().val(m.screen).val(m.wisp != nullptr).add(m.headline).add(m.detail).add(m.yes).add(m.no).val(m.caption_lines)
+    uint32_t stat = Hash().val(m.screen).val(m.wisp != nullptr).val(m.wisp_frame).add(m.headline).add(m.detail).add(m.yes).add(m.no).val(m.caption_lines)
                         .val(m.name_target).add(m.face ? m.face->hash : std::string()).get();
     uint32_t anim = hero_anim_key(m);
     int y0 = y_header, y1 = y_bottom;
@@ -674,7 +674,7 @@ void Ui::draw_top(Canvas& c, const UiModel& m) {
   const int s = layout_.scale;
   const int w = info_.width;
   if (!m.chrome) {  // hidden: the band stays dark, or shows the face behind it
-    if (m.wisp) blit_wisp(c, 0, layout_.top_h);
+    if (m.wisp) ensure_wisp(m), blit_wisp(c, 0, layout_.top_h);
     else c.fill_rect(0, 0, w, layout_.top_h, bg_);
     return;
   }
@@ -1594,10 +1594,11 @@ void Ui::ensure_wisp(const UiModel& m) {
     wisp_fb_.assign(px, 0);
     wisp_from_ = nullptr;
   }
-  if (wisp_from_ == m.wisp) return;  // a still face: composed once
+  if (wisp_from_ == m.wisp && wisp_frame_ == m.wisp_frame) return;  // composed once per face frame
   FaceFrame f{wisp_fb_.data(), info_.width, info_.height, 0, 0};
-  m.wisp->draw_idle(f, 0.0f);
+  m.wisp->draw(f);
   wisp_from_ = m.wisp;
+  wisp_frame_ = m.wisp_frame;
 }
 
 void Ui::blit_wisp(Canvas& c, int y0, int y1) {
@@ -1702,7 +1703,7 @@ void Ui::draw_bottom(Canvas& c, const UiModel& m) {
   const int s = layout_.scale;
   const int y0 = info_.height - layout_.bottom_h;
   if (!m.chrome) {  // hidden: the band stays dark, or shows the face behind it
-    if (m.wisp) blit_wisp(c, y0, info_.height);
+    if (m.wisp) ensure_wisp(m), blit_wisp(c, y0, info_.height);
     else c.fill_rect(0, y0, info_.width, layout_.bottom_h, bg_);
     return;
   }

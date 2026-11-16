@@ -69,29 +69,113 @@ struct FaceFrame {
 void add_part(FaceFrame& f, const WispFace::Part& part, float x, float y, float sx, float sy, int alpha = 256,
               const float* row_dx = nullptr);
 
-// Draws the face from a WispFace, following the animation spec the file carries.
+// Adds `part` turned by `angle` radians about the screen point (px, py): the part's full-size
+// top-left corner sits at (x, y) relative to that pivot before turning, scaled by (sx, sy).
+// Used for the mouth's small tilt as she turns her head.
+void add_part_rotated(FaceFrame& f, const WispFace::Part& part, float px, float py, float x, float y, float sx,
+                      float sy, float angle, int alpha = 256);
+
+// Wisp's states, as animation_spec.json names them.
+enum class WispState : uint8_t {
+  Idle, Listening, Thinking, Research, Notes, Speaking, Success, Sad, Annoyed, Sleepy, Love, Excited, Wink, Count
+};
+const char* wisp_state_name(WispState s);
+bool wisp_state_from(std::string_view name, WispState& out);
+
+// Animates and draws the face from a WispFace, following the animation spec the file carries.
+// A port of the Wisp project's browser preview (preview/template.html, frame()): gaze that
+// wanders per state, blinks, turned mouths with hysteresis, the swaying flame that trails head
+// turns, props (browser, quill, level-driven mic) and the thinking dots.
 class WispFaceRenderer {
  public:
   // False when the file lacks a part or setting the face needs.
-  bool begin(const WispFace& face, std::string* error = nullptr);
+  bool begin(const WispFace& face, std::string* error = nullptr, uint32_t seed = 1);
   bool ready() const { return face_ != nullptr; }
+
+  void set_state(WispState s);
+  WispState state() const { return state_; }
+  // Listening: the microphone level, 0..1 (the mic prop's frame). Without one the renderer
+  // makes up a speaking voice, as the preview does.
+  void set_mic_level(float level) { mic_in_ = level; }
+  // Speaking: the voice's loudness, 0..1 (the mouth). Below 0, made up as in the preview.
+  void set_talk_level(float level) { talk_in_ = level; }
+  // Advances the animation by dt seconds (clamped to 50 ms, as the preview does).
+  void step(float dt);
+  // Draws the current frame. Clears the frame's rows to black first.
+  void draw(FaceFrame& f) const;
+  uint32_t frame() const { return frame_; }  // changes on every step
+  float time() const { return pose_.t; }
   // The resting face at time t seconds: flame (swaying, breathing, pulsing), neutral eyes and
   // closed mouth, gaze straight ahead. Clears the frame's rows to black first.
   void draw_idle(FaceFrame& f, float t) const;
 
+  // What a frame needs, as the animation left it (public for tests).
+  struct Pose {
+    float t = 0;
+    float gaze_x = 0, gaze_y = 0, lag_x = 0, lag_y = 0, body_y = 0;
+    float fl_size = 1, fl_bright = 1, fl_speed = 1;
+    float flare_t = -10;
+    int blink_eye = -1;  // the eye drawing a blink shows now, or -1
+    int prop = -1;       // 0 browser, 1 quill, 2 mic, -1 none
+    float prop_alpha = 0;
+    float mic_level = 0, talk_amp = 0;
+    int mouth = 0, mouth_step = 0, mouth_side = 1;  // the ladder, its step, +1 right / -1 left
+  };
+  const Pose& pose() const { return pose_; }
+
  private:
+  struct Entry {
+    const WispFace::Part* part = nullptr;
+    float ax = 0, ay = 0, dx = 0, dy = 0;
+  };
+  struct Ladder {
+    std::string name;
+    Entry fwd;
+    std::vector<Entry> right, left;
+  };
+  enum class Gaze : uint8_t { Wander, Listen, Think, Research, Notes, Calm, Still };
+  struct StateLook {
+    int eyes = 0, mouth = 0;
+    bool talk = false, blink = true, dots = false, flare = false;
+    Gaze gaze = Gaze::Wander;
+    int prop = -1;
+    float fl_size = 1, fl_bright = 1, fl_speed = 1;
+  };
+
+  void draw_pose(FaceFrame& f, const Pose& p) const;
+  bool can_blink() const;
+  void choose_gaze(float dt);
+  float rand(float a, float b);
+
   const WispFace* face_ = nullptr;
-  const WispFace::Part *flame_ = nullptr, *eye_l_ = nullptr, *eye_r_ = nullptr, *mouth_ = nullptr;
-  // Manifest entries for the parts above (anchors and offsets).
-  float flame_ax_ = 0, flame_ay_ = 0;
-  float eye_l_ax_ = 0, eye_l_ay_ = 0, eye_l_dx_ = 0, eye_l_dy_ = 0;
-  float eye_r_ax_ = 0, eye_r_ay_ = 0, eye_r_dx_ = 0, eye_r_dy_ = 0;
-  float mouth_ax_ = 0, mouth_ay_ = 0;
-  // Layout (screen pixels) and tuning from the spec.
+  std::vector<Entry> eyes_l_, eyes_r_;
+  std::vector<Ladder> ladders_;
+  Entry flame_;
+  std::vector<Entry> props_[3];  // browser, quill, mic frames
+  StateLook looks_[static_cast<int>(WispState::Count)];
+  // Layout (screen pixels).
   float eye_lx_ = 0, eye_ly_ = 0, eye_rx_ = 0, eye_ry_ = 0, mouth_x_ = 0, mouth_y_ = 0, flame_x_ = 0, flame_y_ = 0;
   float eye_cy_ = 0;
-  float eye_line_ = 224, face_size_ = 1, flame_size_ = 0.86f, mouth_scale_ = 1.1f;
-  float breath_ = 2, sway_ = 9, flow_ = 1.3f, pulse_ = 0.25f;
+  int blink_half_ = 9, blink_closed_ = 14;
+  // Tuning (animation_spec.json "tuning"), with the preview's defaults.
+  float eye_line_ = 224, face_size_ = 1, flame_size_ = 0.86f, up_lift_ = 2.2f, follow_ = 1.45f, pitch_ = 0.23f;
+  float glance_ = 11, turn_ = 0.12f, hold_ = 2.2f, saccade_ = 0.075f, blink_every_ = 4.5f, breath_ = 2, sway_ = 9;
+  float flow_ = 1.3f, pulse_ = 0.25f, lag_ = 0.35f, prop_size_ = 1.16f, quill_size_ = 1.46f, quill_travel_ = 64;
+  float prop_x_ = 290, prop_y_ = 345, prop_fps_ = 5, mic_size_ = 0.8f, mic_y_ = 440, squash_ = 0.28f;
+  bool turn_mouths_ = true;
+  float turn1_ = 0.28f, turn2_ = 0.62f, mouth_fore_ = 0.19f, mouth_rot_ = 7, mouth_scale_ = 1.1f, mouth_depth_ = 0.71f;
+
+  // Animation state (the preview's globals).
+  WispState state_ = WispState::Idle;
+  Pose pose_;
+  float target_x_ = 0, target_y_ = 0;
+  float next_glance_ = 0, next_blink_ = 2, blink_t_ = -1;
+  int dart_side_ = 1;
+  float talk_syl_end_ = 0, talk_peak_ = 0, talk_pause_until_ = 0;
+  float mic_raw_ = 0, mic_syl_end_ = 0, mic_peak_ = 0, mic_pause_until_ = 0;
+  float mic_in_ = -1, talk_in_ = -1;
+  int mouth_seen_ = -1, mouth_seen_side_ = 0, mouth_seen_n_ = 0;
+  uint32_t rng_ = 1, frame_ = 0;
   mutable std::vector<float> row_dx_;  // the flame's per-row sway, reused each frame
 };
 

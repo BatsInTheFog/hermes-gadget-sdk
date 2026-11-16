@@ -2502,6 +2502,17 @@ void App::tick() {
     bars_until_ = 0;
     if (bars_shown_) update_model();
   }
+  // Wisp's face animates at its own rate while it is on screen (only its rows are redrawn).
+  if (model_.wisp && !display_sleeping_) {
+    if (t - face_at_ >= kFaceFrameMs) {
+      wisp_renderer_.step(static_cast<float>(t - face_at_) / 1000.0f);
+      face_at_ = t;
+      model_.wisp_frame = wisp_renderer_.frame();
+      render(model_);
+    }
+  } else {
+    face_at_ = t;
+  }
 
   // Text that follows a hero screen, such as a reply after its speech, gets its first page's reading time.
   if (model_.hero) page_at_ = t + page_dwell_ms();
@@ -2877,6 +2888,9 @@ void App::update_model() {
         // Wisp's own face and greeting on the idle screen.
         m.wisp = &wisp_renderer_;
         if (!switching) m.headline = "Hi, I'm " + (name_.empty() ? std::string("Wisp") : name_);
+        const WispState want = face_forced_ ? face_force_ : WispState::Idle;
+        if (wisp_renderer_.state() != want) wisp_renderer_.set_state(want);
+        m.wisp_frame = wisp_renderer_.frame();
       }
     }
     if (chat_open_) {
@@ -3044,6 +3058,20 @@ std::string App::console(std::string_view raw) {
            "forget <ssid>] | phone [pair [close] | forget] | perf [on | off | reset | budget <us> | bench [scroll | mascot | redraw | all]] | yes | no | reconnect | forget-key | factory-reset   keys:" + keys;
   }
   if (cmd == "status") return "@status " + status_json();
+  if (cmd == "face") {
+    // Wisp's face: which state it shows, and forcing one for testing ("face auto" lets the app choose).
+    if (!wisp_renderer_.ready()) return "@error no Wisp face loaded";
+    if (rest.empty())
+      return std::string("@face {\"state\":\"") + wisp_state_name(wisp_renderer_.state()) + "\",\"forced\":" +
+             (face_forced_ ? "true" : "false") + "}";
+    WispState s;
+    if (rest == "auto") face_forced_ = false;
+    else if (wisp_state_from(rest, s)) face_forced_ = true, face_force_ = s;
+    else return "@error usage: face [auto | idle | listening | thinking | research | notes | speaking | success | sad | "
+                "annoyed | sleepy | love | excited | wink]";
+    update_model();
+    return "@ok face";
+  }
   if (cmd == "phone") {
     if (!on_phone_pair) return "@error Bluetooth is not enabled on this board";
     if (rest.empty()) return "@phone " + phone_value().dump();
