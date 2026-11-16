@@ -773,6 +773,8 @@ Board option `esp32s3-touch-amoled-18-v1`, for the **V1** revision of the rectan
 
 The display uses the same QSPI framing as the CO5300 (`AmoledPanel::Sh8601_368` in `port_amoled.cpp`), with the SH8601 table from xiaozhi-esp32's V1 board. Brightness is the panel's 0x51 command.
 
+The glass is 368×448. As on V2, the UI draws 368×432 (`amoled.height = 432`, `gap_y = 8`): the panel's window covers all 448 rows, the top and bottom 8 rows are blanked once at start-up, and the UI keeps clear of the rounded corners. Hence `368x432` in the boot log. Set `height = 448` and `gap_y = 0` (and `touch.offset_y = 0`) for a full-glass UI.
+
 **Build and flash it** with PlatformIO:
 
 ```bash
