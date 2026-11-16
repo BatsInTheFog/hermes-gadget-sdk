@@ -130,6 +130,11 @@ class WispFaceRenderer {
   void draw(FaceFrame& f) const;
   // The rows the last draw() changed: what it drew now and what it cleared from before.
   void changed_rows(int& y0, int& y1) const { y0 = changed_y0_, y1 = changed_y1_; }
+  // `to` now holds exactly what the last draw() left in `from` (its rows were copied over): the
+  // next draw into `to` carries on from there instead of redrawing everything.
+  void rebase(const uint16_t* from, const uint16_t* to) const {
+    if (last_px_ == from) last_px_ = to;
+  }
   uint32_t frame() const { return frame_; }  // changes on every step
   float time() const { return pose_.t; }
   // The resting face at time t seconds: flame (swaying, breathing, pulsing), neutral eyes and

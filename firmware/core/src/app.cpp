@@ -1138,20 +1138,31 @@ void App::wisp_model(UiModel& m) {
     default: break;
   }
   if (!face) return;
+  if (face_forced_) want = face_force_;
+  const int h = ui_ ? ui_->area().height : 448;
+  face_want_.set = true;
+  face_want_.state = want;
+  face_want_.scale = clock ? kFaceClockScale : 1.0f;
+  face_want_.eye_y = clock ? h * 0.3f : -1.0f;
+  face_want_.baseline = ui_ ? static_cast<float>(ui_->wisp_text_top() - 4) : 0.0f;
+  face_want_.mic = m.screen == Screen::Listening ? level_ / 100.0f : -1.0f;
+  m.wisp = &wisp_renderer_;
   m.wisp_async = profile_.face_async != nullptr;
   m.wisp_busy = face_job_.load(std::memory_order_acquire) == 1;
-  if (m.wisp_busy) {  // composing on the worker: leave the renderer alone until it is done
-    m.wisp = &wisp_renderer_;
+  if (m.wisp_async) {  // the worker may be composing: the face changes before its next frame
+    m.wisp_frame = face_shown_;
     return;
   }
-  if (face_forced_) want = face_force_;
-  if (wisp_renderer_.state() != want) wisp_renderer_.set_state(want);
-  const int h = ui_ ? ui_->area().height : 448;
-  wisp_renderer_.set_view(clock ? kFaceClockScale : 1.0f, clock ? h * 0.3f : -1.0f);
-  if (ui_) wisp_renderer_.set_prop_baseline(static_cast<float>(ui_->wisp_text_top() - 4));
-  wisp_renderer_.set_mic_level(m.screen == Screen::Listening ? level_ / 100.0f : -1.0f);
-  m.wisp = &wisp_renderer_;
+  apply_face_want();
   m.wisp_frame = wisp_renderer_.frame();
+}
+
+void App::apply_face_want() {
+  if (!face_want_.set) return;
+  if (wisp_renderer_.state() != face_want_.state) wisp_renderer_.set_state(face_want_.state);
+  wisp_renderer_.set_view(face_want_.scale, face_want_.eye_y);
+  if (ui_) wisp_renderer_.set_prop_baseline(face_want_.baseline);
+  wisp_renderer_.set_mic_level(face_want_.mic);
 }
 
 void App::face_job_entry(void* arg) {
@@ -1159,30 +1170,51 @@ void App::face_job_entry(void* arg) {
   App* a = static_cast<App*>(arg);
   const uint64_t t0 = a->hal_.system->now_us();
   FaceFrame f = a->face_job_frame_;
+  // This buffer holds the frame before last: bring over the rows the last frame changed (in
+  // the other buffer, being shown), and it holds exactly the last frame.
+  const FaceFrame& from = a->face_sync_from_;
+  if (from.px && from.px != f.px) {
+    const int c0 = std::max(0, a->face_sync_c0_), c1 = std::min<int>(f.h, a->face_sync_c1_);
+    if (c1 > c0)
+      std::memcpy(f.px + static_cast<size_t>(c0) * f.w, from.px + static_cast<size_t>(c0) * f.w,
+                  static_cast<size_t>(c1 - c0) * f.w * 2);
+    a->wisp_renderer_.rebase(from.px, f.px);
+  }
   a->wisp_renderer_.draw(f);
+  a->wisp_renderer_.changed_rows(a->face_job_c0_, a->face_job_c1_);
   a->face_job_us_ = static_cast<uint32_t>(a->hal_.system->now_us() - t0);
   a->face_job_.store(2, std::memory_order_release);
 }
 
 void App::face_tick_async(uint32_t t) {
-  // A composed frame: show it (copy and send, here on the app task).
+  // A composed frame: it becomes the one shown, and the worker may start the next one in the
+  // other buffer while this task sends it (copy and send) to the screen.
+  bool show = false;
   if (face_job_.load(std::memory_order_acquire) == 2) {
     face_job_total_us_ += face_job_us_, ++face_jobs_;
     face_job_.store(0, std::memory_order_relaxed);
     model_.wisp_busy = false;
-    if (model_.wisp && ui_ && !display_sleeping_) {
-      ui_->wisp_published(&wisp_renderer_, wisp_renderer_.frame());
-      model_.wisp_frame = wisp_renderer_.frame();
-      const uint32_t r0 = now();
-      render(model_);
-      face_render_ms_ = now() - r0;
+    if (ui_) {
+      ui_->wisp_published(face_buf_, face_job_c0_, face_job_c1_);
+      face_sync_from_ = face_job_frame_;
+      face_sync_c0_ = face_job_c0_, face_sync_c1_ = face_job_c1_;
+      face_buf_ ^= 1;
+      model_.wisp_frame = ++face_shown_;
+      show = model_.wisp && !display_sleeping_;
     }
   }
-  if (face_job_.load(std::memory_order_acquire) != 0) return;  // still composing
+  auto show_it = [&] {
+    if (!show) return;
+    const uint32_t r0 = now();
+    render(model_);
+    face_render_ms_ = now() - r0;
+  };
+  if (face_job_.load(std::memory_order_acquire) != 0) return show_it();  // still composing
   if (!model_.wisp || display_sleeping_ || !ui_) {
     face_at_ = face_full_at_ = t;
-    return;
+    return show_it();
   }
+  apply_face_want();
   // What to compose next. Speaking a reply: the whole face ~10 a second and the mouth lane in
   // between; otherwise whole frames at up to kFaceFrameMs. Showing a frame costs the app task
   // face_render_ms_, so frames come no closer than a quarter more than that.
@@ -1205,12 +1237,13 @@ void App::face_tick_async(uint32_t t) {
     ++face_mouth_frames_;
     face_at_ = t;
   } else {
-    return;
+    return show_it();
   }
-  face_job_frame_ = ui_->wisp_target();
+  face_job_frame_ = ui_->wisp_target(face_buf_);
   model_.wisp_busy = true;
   face_job_.store(1, std::memory_order_release);
   profile_.face_async(&App::face_job_entry, this);
+  show_it();
 }
 
 std::string App::wisp_timing_json() const {

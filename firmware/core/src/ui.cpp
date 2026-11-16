@@ -524,9 +524,6 @@ void Ui::render(const UiModel& m) {
 }
 
 void Ui::draw_frame(const UiModel& m) {
-  // The face is being composed on another core: show nothing now (its buffer is in flux); the
-  // frame after it is done repaints whatever changed meanwhile.
-  if (m.wisp && m.wisp_busy) return;
   // A display that holds only a band of rows cannot resend rows it missed, so it
   // asks for the whole screen again rather than leave a stale band on the panel.
   if (display_.take_redraw_request()) valid_ = false;
@@ -590,8 +587,9 @@ void Ui::draw_frame(const UiModel& m) {
   int face_c0 = 0, face_c1 = 0;
   if (m.wisp) {
     ensure_wisp(m);
-    m.wisp->changed_rows(face_c0, face_c1);
+    wisp_changed(m, face_c0, face_c1);
   }
+  wisp_c0_ = face_c0, wisp_c1_ = face_c1;
   const bool face_top = m.wisp && !m.chrome && face_c0 < layout_.top_h && face_c1 > 0;
   const bool face_bottom = m.wisp && !m.chrome && face_c1 > h - layout_.bottom_h;
   // A rectangular top bar's line fills with the timer: its width in pixels, or -1 with no timer.
@@ -1570,8 +1568,7 @@ bool Ui::talk_caption_fits() const {
 void Ui::hero_anim_rows(const UiModel& m, int& y0, int& y1) const {
   if (m.wisp) {
     // Wisp's face: the rows its last frame changed (draw_frame composed it first).
-    int c0, c1;
-    m.wisp->changed_rows(c0, c1);
+    const int c0 = wisp_c0_, c1 = wisp_c1_;
     y0 = std::max(c0, layout_.top_h);
     y1 = std::min(c1, static_cast<int>(info_.height) - layout_.bottom_h);
     if (y1 <= y0) y0 = y1 = layout_.top_h;
@@ -1627,13 +1624,27 @@ int Ui::wisp_text_top() const {
   return info_.height - layout_.bottom_h - 2 * Canvas::line_height(s) - 2 * s;
 }
 
-FaceFrame Ui::wisp_target() {
+FaceFrame Ui::wisp_target(int k) {
   const size_t px = static_cast<size_t>(info_.width) * info_.height;
-  if (wisp_fb_.size() != px) {
-    wisp_fb_.assign(px, 0);
-    wisp_from_ = nullptr;
+  if (wisp_fb_.size() != px) wisp_fb_.assign(px, 0), wisp_from_ = nullptr;
+  if (wisp_fb2_.size() != px) wisp_fb2_.assign(px, 0);
+  return FaceFrame{k ? wisp_fb2_.data() : wisp_fb_.data(), info_.width, info_.height, 0, 0};
+}
+
+void Ui::wisp_published(int k, int y0, int y1) {
+  wisp_shown_ = k;
+  if (y1 <= y0) return;
+  if (wisp_pend_y1_ <= wisp_pend_y0_) wisp_pend_y0_ = y0, wisp_pend_y1_ = y1;
+  else wisp_pend_y0_ = std::min(wisp_pend_y0_, y0), wisp_pend_y1_ = std::max(wisp_pend_y1_, y1);
+}
+
+void Ui::wisp_changed(const UiModel& m, int& y0, int& y1) {
+  if (!m.wisp_async) {
+    m.wisp->changed_rows(y0, y1);
+    return;
   }
-  return FaceFrame{wisp_fb_.data(), info_.width, info_.height, 0, 0};
+  y0 = wisp_pend_y0_, y1 = wisp_pend_y1_;  // everything published since the last showing
+  wisp_pend_y0_ = wisp_pend_y1_ = 0;
 }
 
 void Ui::ensure_wisp(const UiModel& m) {
@@ -1642,7 +1653,11 @@ void Ui::ensure_wisp(const UiModel& m) {
     wisp_fb_.assign(px, 0);
     wisp_from_ = nullptr;
   }
-  if (m.wisp_async) return;  // composed by the app's worker; this only shows it
+  if (m.wisp_async) {  // composed by the app's worker; this only shows it
+    if (wisp_fb2_.size() != px) wisp_fb2_.assign(px, 0);
+    return;
+  }
+  wisp_shown_ = 0;
   if (wisp_from_ == m.wisp && wisp_frame_ == m.wisp_frame) return;  // composed once per face frame
   FaceFrame f{wisp_fb_.data(), info_.width, info_.height, 0, 0};
   const uint64_t t0 = clock_ ? clock_->now_us() : 0;
@@ -1655,12 +1670,12 @@ void Ui::ensure_wisp(const UiModel& m) {
 }
 
 void Ui::blit_wisp(Canvas& c, int y0, int y1) {
-  if (wisp_fb_.empty() || y1 <= y0) return;
+  if (wisp_fb_.empty() || (wisp_shown_ && wisp_fb2_.empty()) || y1 <= y0) return;
   // Only the rows this band's canvas holds and its clip allows.
   y0 = std::max(y0, c.clip_y0()), y1 = std::min(y1, c.clip_y1());
   if (y1 <= y0) return;
   const uint64_t t0 = clock_ ? clock_->now_us() : 0;
-  c.blit(0, y0, info_.width, y1 - y0, wisp_fb_.data() + static_cast<size_t>(y0) * info_.width);
+  c.blit(0, y0, info_.width, y1 - y0, wisp_px() + static_cast<size_t>(y0) * info_.width);
   if (clock_) wisp_timing_.copy_us += clock_->now_us() - t0, ++wisp_timing_.copies, wisp_timing_.copy_rows += y1 - y0;
 }
 
@@ -2202,7 +2217,7 @@ void Ui::draw_wisp_clock(const UiModel& m) {
   each_window(0, panel_.height, [&](int, int) {
     Canvas panel = panel_canvas();
     panel.fill_rect(0, 0, panel_.width, panel_.height, 0);  // the face's own black, also where the shift uncovers
-    if (!wisp_fb_.empty()) panel.blit(ox_ + shift.dx, oy_, W, H, wisp_fb_.data());
+    if (!wisp_fb_.empty() && (!wisp_shown_ || !wisp_fb2_.empty())) panel.blit(ox_ + shift.dx, oy_, W, H, wisp_px());
     panel.text(ox_ + W / 2 + shift.dx - Canvas::text_width(m.clock_time, k) / 2, oy_ + time_y, m.clock_time, k, kText);
     panel.text(ox_ + W / 2 + shift.dx - Canvas::text_width(m.clock_date, ds) / 2, oy_ + date_y, m.clock_date, ds, kDim);
     // The battery, centred in a strip the bottom bar's height along the bottom (icon and percent

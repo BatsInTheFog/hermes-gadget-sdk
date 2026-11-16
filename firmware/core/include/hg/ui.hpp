@@ -220,10 +220,11 @@ class Ui {
   };
   const WispTiming& wisp_timing() const { return wisp_timing_; }
   void reset_wisp_timing() { wisp_timing_ = WispTiming{}; }
-  // The face's buffer, for a renderer composing on another core, and marking a composed frame
-  // as the one to show (the UI then copies it instead of composing).
-  FaceFrame wisp_target();
-  void wisp_published(const WispFaceRenderer* r, uint32_t frame) { wisp_from_ = r, wisp_frame_ = frame; }
+  // Two face buffers for a renderer composing on another core: it draws the next frame into
+  // one while the UI shows the other. wisp_published marks buffer k, whose rows [y0, y1)
+  // changed, as the one to show; changes add up until a frame shows them.
+  FaceFrame wisp_target(int k);
+  void wisp_published(int k, int y0, int y1);
   // The area the UI draws in: the whole panel, or on a round panel the square
   // inscribed in it. Layout coordinates are relative to this area.
   const DisplayInfo& area() const { return info_; }
@@ -351,7 +352,12 @@ class Ui {
   DisplayInfo info_;
   uint16_t bg_;  // background colour (see DisplayInfo::emissive)
   // Wisp's face, composed for the whole panel (native RGB565), and what it was composed from.
-  std::vector<uint16_t> wisp_fb_;
+  std::vector<uint16_t> wisp_fb_, wisp_fb2_;  // the second only with a face worker
+  int wisp_shown_ = 0;                       // the buffer shown
+  int wisp_pend_y0_ = 0, wisp_pend_y1_ = 0;  // published rows not yet shown
+  int wisp_c0_ = 0, wisp_c1_ = 0;            // the face's changed rows in this draw
+  uint16_t* wisp_px() { return wisp_shown_ ? wisp_fb2_.data() : wisp_fb_.data(); }
+  void wisp_changed(const UiModel& m, int& y0, int& y1);
   const WispFaceRenderer* wisp_from_ = nullptr;
   uint32_t wisp_frame_ = 0;
   WispTiming wisp_timing_;

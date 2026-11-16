@@ -9814,3 +9814,37 @@ TEST("wisp face: composed on another core, the app waits its turn and shows each
   // The face command reports the worker's compose time.
   CHECK(r.app.console("face").find("\"worker_compose_us\"") != std::string::npos);
 }
+
+TEST("wisp face: with two buffers, every frame on screen matches the face drawn from scratch") {
+  const auto file = wisp_file();
+  hg::DeviceProfile p = wisp_profile(file);
+  p.face_async = &face_async_later;
+  g_face_job = nullptr, g_face_kicks = 0;
+  Rig r(p);
+  r.bring_online(true);
+  r.advance(200);
+  CHECK(r.app.model().wisp != nullptr);
+  run_face_job();  // kicked long ago: the next one starts as soon as it shows
+  r.advance(10);
+  int checked = 0;
+  for (int frame = 0; frame < 12; ++frame) {
+    // Wait for a kick, compose it at once, then let one tick show it (too soon for the next).
+    for (int i = 0; i < 20 && !g_face_job; ++i) r.advance(10);
+    CHECK(run_face_job());
+    r.advance(10);
+    CHECK(!g_face_job);  // shown, and nothing new kicked yet
+    std::vector<uint16_t> fresh(320 * 240, 0);
+    hg::FaceFrame f{fresh.data(), 320, 240, 0, 0};
+    r.app.model().wisp->draw(f);
+    bool same = true;
+    for (int y = 60; y < 150 && same; ++y)
+      for (int x = 0; x < 320; ++x)
+        if (r.fake.fb[static_cast<size_t>(y * 320 + x)] != fresh[static_cast<size_t>(y * 320 + x)]) {
+          same = false;
+          break;
+        }
+    CHECK(same);
+    checked += same;
+  }
+  CHECK_EQ(checked, 12);
+}

@@ -946,6 +946,18 @@ private:
   uint64_t face_job_total_us_ = 0;
   uint32_t face_jobs_ = 0;
   uint32_t face_render_ms_ = 0;          // the last showing of a composed frame (copy and send)
+  int face_buf_ = 0;                     // the buffer the worker composes into (the other shows)
+  int face_job_c0_ = 0, face_job_c1_ = 0;    // the rows the worker's last frame changed
+  int face_sync_c0_ = 0, face_sync_c1_ = 0;  // ...which it copies into the other buffer first
+  FaceFrame face_sync_from_;
+  uint32_t face_shown_ = 0;              // counts frames shown (the model's wisp_frame)
+  // What the screen wants of the face, applied while the worker is idle.
+  struct FaceWant {
+    bool set = false;
+    WispState state = WispState::Idle;
+    float scale = 1, eye_y = -1, baseline = 0, mic = -1;
+  } face_want_;
+  void apply_face_want();
   static void face_job_entry(void* app);
   void face_tick_async(uint32_t t);
   static constexpr float kFaceClockScale = 0.62f;  // the resting clock's face, in the top half
