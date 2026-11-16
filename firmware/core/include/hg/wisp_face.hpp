@@ -46,6 +46,10 @@ class WispFace {
   const Part* part_for(const json::Value& entry) const;
   const json::Value& manifest() const { return meta_["manifest"]; }
   const json::Value& spec() const { return meta_["spec"]; }
+  // Frees the parsed manifest and spec once a renderer has copied what it needs: parsed, they
+  // are thousands of small allocations, which on the board land in scarce internal RAM.
+  // manifest() and spec() are empty afterwards; the parts stay.
+  void drop_metadata() { meta_ = json::Value(); }
   size_t part_count() const { return parts_.size(); }
 
  private:

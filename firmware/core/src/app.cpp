@@ -298,6 +298,7 @@ void App::begin() {
       log(LogLevel::Info, "Wisp face loaded: " + std::to_string(wisp_face_.part_count()) + " parts");
     else
       log(LogLevel::Warn, "Wisp face not used (" + why + "); showing the mascot");
+    wisp_face_.drop_metadata();  // the renderer has what it needs; free the parsed JSON (internal RAM)
   }
   load_settings();
   agent_profile_ = setting("profile", "default");  // shown until Hermes confirms it; not a console setting
