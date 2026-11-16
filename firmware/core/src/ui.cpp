@@ -1588,6 +1588,11 @@ void Ui::hero_anim_rows(const UiModel& m, int& y0, int& y1) const {
   y1 = std::min(bottom + 2, static_cast<int>(info_.height) - layout_.bottom_h);
 }
 
+int Ui::wisp_text_top() const {
+  const int s = layout_.scale;
+  return info_.height - layout_.bottom_h - 2 * Canvas::line_height(s) - 2 * s;
+}
+
 void Ui::ensure_wisp(const UiModel& m) {
   const size_t px = static_cast<size_t>(info_.width) * info_.height;
   if (wisp_fb_.size() != px) {
@@ -1616,13 +1621,22 @@ void Ui::draw_hero(Canvas& c, const UiModel& m) {
     // Wisp's face fills the panel; up to two lines of text sit near the bottom, over the art.
     ensure_wisp(m);
     blit_wisp(c, y0, y1);
+    // With a headline: it, then the detail's first line. Without one (a spoken reply's latest
+    // lines): the detail's first two lines.
     const int cols = layout_.hero_cols;
-    int ty = y1 - 2 * lh - 2 * s;
-    const std::string head = fit(m.headline, cols);
-    c.text((w - Canvas::text_width(head, s)) / 2, ty, head, s, caption_color(m.screen));
-    if (!m.detail.empty()) {
-      const std::string first = fit(m.detail.substr(0, m.detail.find('\n')), cols);
-      c.text((w - Canvas::text_width(first, s)) / 2, ty + lh, first, s, kDim);
+    const int ty = wisp_text_top();
+    std::vector<std::pair<std::string, uint16_t>> lines;
+    if (!m.headline.empty()) lines.push_back({m.headline, caption_color(m.screen)});
+    for (size_t start = 0; lines.size() < 2 && start < m.detail.size();) {
+      size_t end = m.detail.find('\n', start);
+      if (end == std::string::npos) end = m.detail.size();
+      const std::string line = m.detail.substr(start, end - start);
+      if (line != m.headline) lines.push_back({line, lines.empty() ? kText : kDim});  // no echo of the headline
+      start = end + 1;
+    }
+    for (size_t i = 0; i < lines.size(); ++i) {
+      const std::string t = fit(lines[i].first, cols);
+      c.text((w - Canvas::text_width(t, s)) / 2, ty + static_cast<int>(i) * lh, t, s, lines[i].second);
     }
     return;
   }
@@ -2105,6 +2119,47 @@ void Ui::draw_battery_face(const UiModel& m) {
   });
 }
 
+// The resting clock with Wisp: her face asleep in the top half (the app draws it smaller,
+// App::update_model), the time large and the date below it in the bottom half. The whole
+// face shifts a few pixels each minute to spare the panel; it repaints with each face frame.
+void Ui::draw_wisp_clock(const UiModel& m) {
+  const uint32_t key = Hash().add(m.clock_time).add(m.clock_date).val(m.clock_minute).val(m.lang).val(m.wisp_frame)
+                           .val(m.battery).val(m.battery_charging).val(m.battery_low).val(m.battery_icon).val(m.battery_text).get();
+  if (valid_ && full_face_ == FullFace::Clock && key == face_hash_) return;
+  full_face_ = FullFace::Clock;
+  face_hash_ = key;
+  valid_ = true;
+  ensure_wisp(m);
+  const int s = layout_.scale;
+  const int W = info_.width, H = info_.height, gap = 3 * s, margin = 8;
+  const BurnInShift shift = burn_in_shift(m.clock_minute);
+  // The largest time that fits the width and, with the date, the bottom half.
+  int k = 1, ds = s;
+  for (int kk = 10; kk >= 1; --kk) {
+    const int dsk = Canvas::text_width(m.clock_date, s + 1) <= W - 2 * margin ? s + 1 : s;
+    if (Canvas::text_width(m.clock_time, kk) > W - 2 * margin) continue;
+    if (Canvas::line_height(kk) + gap + Canvas::line_height(dsk) > H / 2 - 2 * margin) continue;
+    k = kk, ds = dsk;
+    break;
+  }
+  const int body_h = Canvas::line_height(k) + gap + Canvas::line_height(ds);
+  const int time_y = H / 2 + (H / 2 - body_h) / 2 + shift.dy, date_y = time_y + Canvas::line_height(k) + gap;
+  each_window(0, panel_.height, [&](int, int) {
+    Canvas panel = panel_canvas();
+    panel.fill_rect(0, 0, panel_.width, panel_.height, 0);  // the face's own black, also where the shift uncovers
+    if (!wisp_fb_.empty()) panel.blit(ox_ + shift.dx, oy_, W, H, wisp_fb_.data());
+    panel.text(ox_ + W / 2 + shift.dx - Canvas::text_width(m.clock_time, k) / 2, oy_ + time_y, m.clock_time, k, kText);
+    panel.text(ox_ + W / 2 + shift.dx - Canvas::text_width(m.clock_date, ds) / 2, oy_ + date_y, m.clock_date, ds, kDim);
+    // The battery, centred in a strip the bottom bar's height along the bottom (icon and percent
+    // as the battery_display setting asks), shifting with the rest.
+    if (m.battery >= 0) {
+      const int bx = ox_ + W / 2 + shift.dx - battery_width(m) / 2;
+      const int by = oy_ + H - layout_.bottom_h / 2 + std::min(0, shift.dy);
+      draw_battery(panel, m, bx, by);
+    }
+  });
+}
+
 // The resting clock face (App::clock_tick). The whole panel: the time's middle row
 // on the glass centre, the date below it, and the mascot above like a watch logo
 // when the chord there holds it; a rectangular panel centres the group and drops
@@ -2112,6 +2167,10 @@ void Ui::draw_battery_face(const UiModel& m) {
 // the per-minute shift can move it. The face changes once a minute: the burn-in
 // shift keys the hash on the minute too.
 void Ui::draw_clock(const UiModel& m) {
+  if (m.wisp) {
+    draw_wisp_clock(m);
+    return;
+  }
   // The ring's ticks go on with the clock: each push paints them, turned with this minute's
   // shift (edge_ring), and a new second moves only the dot (draw_frame, update_ring).
   const uint32_t key = Hash().add(m.clock_time).add(m.clock_date).val(m.clock_minute).val(m.lang)

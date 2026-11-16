@@ -99,6 +99,13 @@ class WispFaceRenderer {
   void set_mic_level(float level) { mic_in_ = level; }
   // Speaking: the voice's loudness, 0..1 (the mouth). Below 0, made up as in the preview.
   void set_talk_level(float level) { talk_in_ = level; }
+  // The screen row the props (browser, quill, mic) stand on, just above the text lines: each
+  // keeps its motion but its bottom rests there, and the mic moves across to the browser's
+  // place. 0 or less: where the spec puts them.
+  void set_prop_baseline(float y) { prop_base_ = y; }
+  // The whole face drawn smaller with its eyes on another row (the resting clock's top half).
+  // scale 1 and eye_y below 0: the spec's size and eye line.
+  void set_view(float scale, float eye_y) { view_scale_ = scale, view_eye_y_ = eye_y; }
   // Advances the animation by dt seconds (clamped to 50 ms, as the preview does).
   void step(float dt);
   // Draws the current frame. Clears the frame's rows to black first.
@@ -174,6 +181,7 @@ class WispFaceRenderer {
   float talk_syl_end_ = 0, talk_peak_ = 0, talk_pause_until_ = 0;
   float mic_raw_ = 0, mic_syl_end_ = 0, mic_peak_ = 0, mic_pause_until_ = 0;
   float mic_in_ = -1, talk_in_ = -1;
+  float prop_base_ = 0, view_scale_ = 1, view_eye_y_ = -1;
   int mouth_seen_ = -1, mouth_seen_side_ = 0, mouth_seen_n_ = 0;
   uint32_t rng_ = 1, frame_ = 0;
   mutable std::vector<float> row_dx_;  // the flame's per-row sway, reused each frame

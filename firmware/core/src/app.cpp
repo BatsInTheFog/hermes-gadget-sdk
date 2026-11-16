@@ -1,6 +1,7 @@
 #include "hg/app.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 
@@ -1094,6 +1095,55 @@ bool App::show_reply_text() {
   return true;
 }
 
+// Which face Wisp shows on this screen, if any: idle (happy just after an answer, sad after a
+// failure), listening with the mic level, thinking or researching, speaking, and asleep on the
+// resting clock (smaller, in the top half). Other screens keep the mascot.
+void App::wisp_model(UiModel& m) {
+  if (!wisp_renderer_.ready()) return;
+  const uint32_t t = now();
+  WispState want = WispState::Idle;
+  bool face = false, clock = false;
+  switch (m.screen) {
+    case Screen::Listening:
+      face = m.hero;
+      want = WispState::Listening;
+      break;
+    case Screen::Thinking: {
+      face = m.hero;
+      std::string s = status_;
+      for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      const bool research = s.find("search") != std::string::npos || s.find("web") != std::string::npos ||
+                            s.find("brows") != std::string::npos || s.find("look") != std::string::npos;
+      want = research ? WispState::Research : WispState::Thinking;
+      break;
+    }
+    case Screen::Responding:
+      face = m.hero;
+      want = m.speaking ? WispState::Speaking : WispState::Thinking;
+      if (face) m.headline.clear();  // the reply's latest lines are the text
+      break;
+    case Screen::Ready:
+      face = m.hero && !chat_open_;
+      if (static_cast<int32_t>(face_sad_until_ - t) > 0) want = WispState::Sad;
+      else if (static_cast<int32_t>(face_success_until_ - t) > 0) want = WispState::Success;
+      break;
+    case Screen::Clock:
+      face = clock = true;
+      want = WispState::Sleepy;
+      break;
+    default: break;
+  }
+  if (!face) return;
+  if (face_forced_) want = face_force_;
+  if (wisp_renderer_.state() != want) wisp_renderer_.set_state(want);
+  const int h = ui_ ? ui_->area().height : 448;
+  wisp_renderer_.set_view(clock ? kFaceClockScale : 1.0f, clock ? h * 0.3f : -1.0f);
+  if (ui_) wisp_renderer_.set_prop_baseline(static_cast<float>(ui_->wisp_text_top() - 4));
+  wisp_renderer_.set_mic_level(m.screen == Screen::Listening ? level_ / 100.0f : -1.0f);
+  m.wisp = &wisp_renderer_;
+  m.wisp_frame = wisp_renderer_.frame();
+}
+
 void App::reveal_bars() {
   if (!profile_.autohide_bars) return;
   bars_until_ = now() + kBarsShowMs;
@@ -1201,6 +1251,8 @@ void App::h_turn_end(const json::Value& m) {
   if (!active_turn_.empty() && !turn.empty() && turn != active_turn_) return;
   turn_done_ = true;
   last_turn_rx_ = now();
+  turn_outcome_ = m["outcome"].as_string();
+  if (turn_outcome_ == "failure") face_sad_until_ = now() + kFaceSadMs;
   if (m["outcome"].as_string() == "failure" && reply_.empty()) {
     notice_ = tr(i18n::Msg::RequestFailed);
     notice_until_ = now() + 8000;
@@ -2461,6 +2513,10 @@ void App::tick() {
       mode_ = Mode::Idle;
       mode_since_ = t;
       reply_until_ = t + kReplyLingerMs;
+      if (wisp_renderer_.ready()) {
+        reply_until_ = t;  // the face, not the whole text: swipe up brings the text back
+        if (turn_outcome_ != "failure" && turn_outcome_ != "cancelled") face_success_until_ = t + kFaceSuccessMs;
+      }
       update_model();
     }
   }
@@ -2884,13 +2940,13 @@ void App::update_model() {
                    ((sessions || timing) ? "\n" + m.detail : "");
         m.caption_lines = 2;
       }
-      if (wisp_renderer_.ready()) {
-        // Wisp's own face and greeting on the idle screen.
-        m.wisp = &wisp_renderer_;
-        if (!switching) m.headline = "Hi, I'm " + (name_.empty() ? std::string("Wisp") : name_);
-        const WispState want = face_forced_ ? face_force_ : WispState::Idle;
-        if (wisp_renderer_.state() != want) wisp_renderer_.set_state(want);
-        m.wisp_frame = wisp_renderer_.frame();
+      if (wisp_renderer_.ready() && !switching) {
+        // Wisp's own greeting; just after an answer, its latest lines instead.
+        m.headline = "Hi, I'm " + (name_.empty() ? std::string("Wisp") : name_);
+        if (!reply_.empty() && static_cast<int32_t>(face_success_until_ - now()) > 0 && ui_) {
+          m.headline.clear();
+          m.detail = latest_lines(reply_, ui_->layout().hero_cols);
+        }
       }
     }
     if (chat_open_) {
@@ -2927,6 +2983,7 @@ void App::update_model() {
       *power_status_->battery_percent <= 10 && power_status_->external_power == false)
     m.detail = tr(Msg::LowBattery);
   if (!hint_flash_.empty()) m.hint = hint_flash_;
+  wisp_model(m);
   // autohide_bars: the conversation screens keep the bars dark while online, unless a swipe
   // just asked for them or the hint bar carries a message of its own.
   const bool conversation = m.screen == Screen::Ready || m.screen == Screen::Listening ||

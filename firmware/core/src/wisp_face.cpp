@@ -609,9 +609,10 @@ void WispFaceRenderer::draw_pose(FaceFrame& f, const Pose& p) const {
   const float breath = breath_ * std::sin(t * (state_ == WispState::Sleepy ? 0.9f : 1.6f));
   // The whole face scales about the screen's middle, sits on the eye line, and moves up or
   // down with her gaze.
-  const float fs = face_size_, cx = f.w / 2.0f;
+  const float fs = face_size_ * view_scale_, cx = f.w / 2.0f;
   const float body_shift = p.body_y * D * follow_;
-  const float ox = cx - cx * fs, oy = eye_line_ - eye_cy_ * fs + body_shift * fs;
+  const float eye_line = view_eye_y_ >= 0 ? view_eye_y_ : eye_line_;
+  const float ox = cx - cx * fs, oy = eye_line - eye_cy_ * fs + body_shift * fs;
   auto place = [&](const Entry& e, float x, float y, float sx, float sy, int alpha = 256, const float* dx = nullptr) {
     if (e.part) add_part(f, *e.part, fs * x + ox, fs * y + oy, fs * sx, fs * sy, alpha, dx);
   };
@@ -724,6 +725,16 @@ void WispFaceRenderer::draw_pose(FaceFrame& f, const Pose& p) const {
       size = quill_size_;
     }
     if (p.prop == 2) x = 184, y = mic_y_, size = mic_size_ * (1 + 0.04f * p.mic_level);
+    if (prop_base_ > 0) {
+      // Every prop stands on the baseline above the text: its bottom at rest goes there, and
+      // its motion (bob, writing, the mic's swell) carries on from there. The mic joins the
+      // browser on the right.
+      const Entry& rest = fr[0];
+      const float rest_y = p.prop == 2 ? mic_y_ : p.prop == 1 ? prop_y_ + 22 : prop_y_;
+      const float rest_s = p.prop == 2 ? mic_size_ : p.prop == 1 ? quill_size_ : prop_size_;
+      if (rest.part) y += prop_base_ - (rest_y + (rest.part->h - rest.ay) * rest_s);
+      if (p.prop == 2) x = prop_x_;
+    }
     const float s = size * pop;
     for (int j = 0; j < 2; ++j) {
       const Entry& e = fr[j == 0 ? i0 : i1];

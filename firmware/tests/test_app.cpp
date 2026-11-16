@@ -12,6 +12,7 @@
 #include "hg/protocol.hpp"
 #include "hg/qr.hpp"
 #include "hg/setup.hpp"
+#include "wisp_face_file.hpp"
 #include "hg/touch.hpp"
 #include "stopwatch.hpp"
 
@@ -9547,4 +9548,134 @@ TEST("camera: a card Hermes sends waits until the mode leaves, and what asks to 
   r.server(R"({"type":"prompt","id":"q","title":"Allow?","text":"rm -rf build"})");
   CHECK(!r.app.camera_open());  // a question takes the screen, as it takes it from settings
   CHECK(r.app.screen() == hg::Screen::Prompt);
+}
+
+// ---------------------------------------------------------------------------
+// Wisp's face (hg/wisp_face.hpp): which state shows on which screen.
+
+namespace {
+
+// A tiny face file: enough parts for every state (looks clamp to the drawings it has).
+std::vector<uint8_t> wisp_file() {
+  using wisp_test::dot_part;
+  const std::string meta = R"({"manifest":{"screen":[320,240],
+    "layout":{"eyeL":[120,120],"eyeR":[200,120],"mouth":[160,150],"flame":[160,90]},
+    "eyes":[{"L":{"file":"e.png","ax":2,"ay":4},"R":{"file":"e.png","ax":2,"ay":4}}],
+    "mouthLadders":[{"name":"Closed","fwd":{"file":"m.png","ax":2,"ay":1}}],
+    "flame":{"file":"fl.png","ax":2,"ay":8},
+    "props":{"mic":[{"file":"mic.png","ax":1,"ay":1}],"browser":[{"file":"b.png","ax":1,"ay":1}]}},
+    "spec":{"tuning":{"eyeLine":120}}})";
+  return wisp_test::make_file({dot_part("e", 4, 4, 2, 3, 0x07E0), dot_part("m", 4, 2, 2, 1, 0xF800),
+                               dot_part("fl", 4, 8, 2, 7, 0x001F), dot_part("mic", 2, 2, 0, 0, 0x0010),
+                               dot_part("b", 2, 2, 0, 0, 0x0010)},
+                              meta);
+}
+
+hg::DeviceProfile wisp_profile(const std::vector<uint8_t>& file) {
+  hg::DeviceProfile p = Rig::touch_profile();
+  p.face_asset = file.data();
+  p.face_asset_size = file.size();
+  return p;
+}
+
+bool face_is(Rig& r, const char* state) {
+  return r.app.console("face").find(std::string("\"state\":\"") + state + "\"") != std::string::npos;
+}
+
+}  // namespace
+
+TEST("wisp face: without a face file the mascot stays, and the face command says so") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  r.advance(200);
+  CHECK(r.app.model().wisp == nullptr);
+  CHECK(r.app.console("face").rfind("@error", 0) == 0);
+}
+
+TEST("wisp face: idle greets, listening shows the mic, thinking or researching, then speaking") {
+  const auto file = wisp_file();
+  Rig r(wisp_profile(file));
+  r.bring_online(true);
+  r.advance(200);
+  CHECK(r.app.model().wisp != nullptr);
+  CHECK(r.app.model().headline.rfind("Hi, I'm ", 0) == 0);
+  CHECK(face_is(r, "idle"));
+  r.app.on_button(hg::Button::Talk, true);
+  r.advance(500);
+  CHECK(r.app.screen() == hg::Screen::Listening);
+  CHECK(r.app.model().wisp != nullptr);
+  CHECK(face_is(r, "listening"));
+  r.app.on_button(hg::Button::Talk, false);
+  r.server(R"({"type":"turn.start","turn":"t1"})");
+  r.advance(100);
+  CHECK(r.app.screen() == hg::Screen::Thinking);
+  CHECK(face_is(r, "thinking"));
+  r.server(R"({"type":"status","text":"Searching the web"})");
+  r.advance(100);
+  CHECK(face_is(r, "research"));
+  r.server(R"({"type":"audio.start","stream":2,"rate":16000,"format":"pcm16"})");
+  r.server(R"({"type":"reply","turn":"t1","text":"It is sunny today."})");
+  r.fake.spk_draining = true;
+  r.advance(100);
+  CHECK(r.app.screen() == hg::Screen::Responding);
+  if (r.app.model().hero) {
+    CHECK(face_is(r, "speaking"));
+    CHECK(r.app.model().headline.empty());  // the reply's latest lines are the text
+  }
+}
+
+TEST("wisp face: an answer ends happy, then idle; a failure looks sad") {
+  const auto file = wisp_file();
+  Rig r(wisp_profile(file));
+  r.bring_online(true);
+  r.app.submit_text("hello");
+  r.server(R"({"type":"turn.start","turn":"t1"})");
+  r.server(R"({"type":"reply","turn":"t1","text":"Hi there."})");
+  r.server(R"({"type":"turn.end","turn":"t1","outcome":"success"})");
+  r.advance(300);
+  CHECK(r.app.screen() == hg::Screen::Ready);
+  CHECK(r.app.model().hero);  // the face, not the whole reply
+  CHECK(face_is(r, "success"));
+  CHECK(r.app.model().detail.find("Hi there.") != std::string::npos);
+  r.server(R"({"type":"ping","ts":1})");
+  r.advance(hg::App::kFaceSuccessMs + 200);
+  CHECK(face_is(r, "idle"));
+  r.app.submit_text("again");
+  r.server(R"({"type":"turn.start","turn":"t2"})");
+  r.server(R"({"type":"turn.end","turn":"t2","outcome":"failure"})");
+  r.advance(300);
+  CHECK(face_is(r, "sad"));
+  r.server(R"({"type":"ping","ts":1})");
+  r.advance(hg::App::kFaceSadMs + 200);
+  CHECK(face_is(r, "idle"));
+}
+
+TEST("wisp face: the resting clock shows her asleep; the face command forces a state and lets go") {
+  const auto file = wisp_file();
+  Rig r(wisp_profile(file));
+  r.fake.wall_ok = true;
+  r.bring_online(true);
+  CHECK_EQ(r.app.console("set clock 5"), std::string("@ok clock"));
+  r.server(R"({"type":"ping","ts":1})");
+  r.advance(6000);
+  CHECK(r.app.screen() == hg::Screen::Clock);
+  CHECK(r.app.model().wisp != nullptr);
+  CHECK(face_is(r, "sleepy"));
+  CHECK_EQ(r.app.console("face excited"), std::string("@ok face"));
+  CHECK(face_is(r, "excited"));
+  CHECK(r.app.console("face grumpy").rfind("@error", 0) == 0);
+  CHECK_EQ(r.app.console("face auto"), std::string("@ok face"));
+  CHECK(face_is(r, "sleepy"));
+}
+
+TEST("wisp face: the face animates at about 30 frames a second while it is on screen") {
+  const auto file = wisp_file();
+  Rig r(wisp_profile(file));
+  r.bring_online(true);
+  r.advance(200);
+  const uint32_t f0 = r.app.model().wisp_frame;
+  r.server(R"({"type":"ping","ts":1})");
+  r.advance(1000);
+  const uint32_t frames = r.app.model().wisp_frame - f0;
+  CHECK(frames >= 25 && frames <= 35);
 }

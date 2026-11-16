@@ -226,6 +226,8 @@ class App {
   bool bars_hidden() const { return !model_.chrome; }
   bool autohides_bars() const { return profile_.autohide_bars; }
   static constexpr uint32_t kBarsShowMs = 5000;
+  // Wisp's face: how long it looks happy after an answer, and sad after a failure.
+  static constexpr uint32_t kFaceSuccessMs = 2500, kFaceSadMs = 4000;
   // chat_view: whether a sideways swipe now opens or closes the conversation, and doing it.
   bool chat_swipe_live() const;
   void toggle_chat();
@@ -904,6 +906,10 @@ class App {
   WispState face_force_ = WispState::Idle;
   uint32_t face_at_ = 0;  // the face's last animation step
   static constexpr uint32_t kFaceFrameMs = 33;  // about 30 frames a second
+  static constexpr float kFaceClockScale = 0.62f;  // the resting clock's face, in the top half
+  uint32_t face_success_until_ = 0, face_sad_until_ = 0;
+  std::string turn_outcome_;  // the last turn.end's outcome
+  void wisp_model(UiModel& m);
   uint32_t frame_log_at_ = 0, frame_log_frames_ = 0;
   enum class Bench : uint8_t { None, Scroll, Mascot, Redraw, Settings };
   Bench bench_ = Bench::None, bench_last_ = Bench::None;  // running; the last one to run of `perf bench all`

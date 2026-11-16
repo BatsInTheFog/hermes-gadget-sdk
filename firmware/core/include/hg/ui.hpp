@@ -206,6 +206,8 @@ class Ui {
   // An input arrived: the next render that sends anything records its latency.
   void mark_input();
   const UiLayout& layout() const { return layout_; }
+  // Wisp's face: the first row of the two text lines near the bottom (props stand above it).
+  int wisp_text_top() const;
   // The area the UI draws in: the whole panel, or on a round panel the square
   // inscribed in it. Layout coordinates are relative to this area.
   const DisplayInfo& area() const { return info_; }
@@ -337,6 +339,7 @@ class Ui {
   const WispFaceRenderer* wisp_from_ = nullptr;
   uint32_t wisp_frame_ = 0;
   void ensure_wisp(const UiModel& m);
+  void draw_wisp_clock(const UiModel& m);
   void blit_wisp(Canvas& c, int y0, int y1);
   int ox_ = 0, oy_ = 0;  // area origin on the panel
   // First panel row the framebuffer covers right now (see draw_bands); 0 unless
