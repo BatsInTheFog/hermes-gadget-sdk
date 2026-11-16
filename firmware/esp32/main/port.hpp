@@ -415,10 +415,20 @@ class AmoledDisplay final : public hg::Display {
   hg::DisplayInfo info() const override;
   uint16_t* framebuffer() override { return fb_; }
   void flush(uint16_t y0, uint16_t y1) override;
+  bool flush_from(const uint16_t* px, uint16_t y0, uint16_t y1) override;
+  bool take_redraw_request() override {
+    const bool r = redraw_;
+    redraw_ = false;
+    return r;
+  }
   void set_backlight(uint8_t percent) override;
 
  private:
   bool blank_margins();
+  void flush_rows(uint16_t y0, uint16_t y1);
+  const uint16_t* src_ = nullptr;  // flush_from's rows [src_y0_, src_y1_) come from here
+  int src_y0_ = 0, src_y1_ = 0;
+  bool redraw_ = false;
   static bool on_trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t* edata, void* ctx);
   void command(uint8_t cmd, const uint8_t* data, size_t len);
   AmoledConfig cfg_{};

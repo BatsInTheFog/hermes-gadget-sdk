@@ -135,6 +135,21 @@ struct FakeHal : hg::Display, hg::AudioIn, hg::AudioOut, hg::Transport, hg::Stor
     brightness = percent;
     if (percent && dozing) lit_while_dozing = true;
   }
+  // With direct, flush_from sends rows straight from another buffer (into `panel`), the way
+  // the AMOLED boards do; the panel then widens to even rows from the framebuffer.
+  bool direct = false;
+  int direct_rows = 0;
+  bool flush_from(const uint16_t* px, uint16_t y0, uint16_t y1) override {
+    if (!direct || !keep_panel || band_rows) return false;
+    panel.resize(static_cast<size_t>(width * height), 0);
+    const int top = y0 & ~1, bottom = std::min<int>(height, (y1 + 1) & ~1);
+    for (int y = top; y < bottom; ++y) {
+      const uint16_t* in = y >= y0 && y < y1 ? px + static_cast<size_t>(y) * width : fb.data() + static_cast<size_t>(y) * width;
+      std::copy(in, in + width, panel.begin() + static_cast<long>(y) * width);
+    }
+    ++flushes, flushed_rows += y1 - y0, direct_rows += y1 - y0;
+    return true;
+  }
   void flush(uint16_t y0, uint16_t y1) override {
     ++flushes;
     flushed_rows += y1 - y0;
@@ -9816,11 +9831,15 @@ TEST("wisp face: composed on another core, the app waits its turn and shows each
 }
 
 TEST("wisp face: with two buffers, every frame on screen matches the face drawn from scratch") {
+  // Both ways: the face's rows copied into the framebuffer, or sent straight from its buffer.
+  for (bool direct : {false, true}) {
   const auto file = wisp_file();
   hg::DeviceProfile p = wisp_profile(file);
   p.face_async = &face_async_later;
   g_face_job = nullptr, g_face_kicks = 0;
   Rig r(p);
+  r.fake.keep_panel = true;
+  r.fake.direct = direct;
   r.bring_online(true);
   r.advance(200);
   CHECK(r.app.model().wisp != nullptr);
@@ -9839,7 +9858,7 @@ TEST("wisp face: with two buffers, every frame on screen matches the face drawn 
     bool same = true;
     for (int y = 60; y < 150 && same; ++y)
       for (int x = 0; x < 320; ++x)
-        if (r.fake.fb[static_cast<size_t>(y * 320 + x)] != fresh[static_cast<size_t>(y * 320 + x)]) {
+        if (r.fake.panel[static_cast<size_t>(y * 320 + x)] != fresh[static_cast<size_t>(y * 320 + x)]) {
           same = false;
           break;
         }
@@ -9847,4 +9866,45 @@ TEST("wisp face: with two buffers, every frame on screen matches the face drawn 
     checked += same;
   }
   CHECK_EQ(checked, 12);
+  CHECK_EQ(r.fake.direct_rows > 0, direct);
+  }
+}
+
+namespace {
+// A second core per rig: each app's pending face job, run when the test says.
+std::vector<std::pair<void*, void (*)(void*)>> g_face_jobs;
+void face_async_queue(void (*job)(void*), void* arg) { g_face_jobs.push_back({arg, job}); }
+void run_face_jobs() {
+  auto jobs = std::move(g_face_jobs);
+  g_face_jobs.clear();
+  for (auto& j : jobs) j.second(j.first);
+}
+}  // namespace
+
+TEST("wisp face: sending face rows straight from its buffer shows exactly what copying them does") {
+  const auto file = wisp_file();
+  hg::DeviceProfile p = wisp_profile(file);
+  p.face_async = &face_async_queue;
+  g_face_jobs.clear();
+  Rig a(p), b(p);
+  b.fake.direct = true;
+  for (Rig* r : {&a, &b}) r->fake.keep_panel = true, r->bring_online(true);
+  int differ = 0;
+  auto step = [&](int ms) {
+    for (int t = 0; t < ms; t += 10) {
+      run_face_jobs();
+      a.advance(10), b.advance(10);
+      if (a.fake.panel != b.fake.panel) ++differ;
+    }
+  };
+  step(600);
+  a.app.reveal_bars(), b.app.reveal_bars();  // the bars over the face, then gone again
+  step(hg::App::kBarsShowMs + 600);
+  for (Rig* r : {&a, &b}) r->app.submit_text("hello"), r->server(R"({"type":"turn.start","turn":"t1"})");
+  step(400);
+  for (Rig* r : {&a, &b}) r->server(R"({"type":"reply","turn":"t1","text":"Hi there, this is a longer line."})"),
+      r->server(R"({"type":"turn.end","turn":"t1","outcome":"success"})");
+  step(800);
+  CHECK(b.fake.direct_rows > 0);
+  CHECK_EQ(differ, 0);
 }

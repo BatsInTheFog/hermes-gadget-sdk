@@ -474,10 +474,45 @@ void Ui::draw_bands(int y0, int y1, void (Ui::*draw)(Canvas&, const UiModel&), c
     Canvas c = canvas();
     c.set_clip_rows(a - oy_, b - oy_);  // the canvas drops anything past the window as well
     (this->*draw)(c, m);
+    if (any_stale_) clear_stale(a - oy_, b - oy_);
   });
 }
 
+void Ui::clear_stale(int y0, int y1) {
+  y0 = std::max(y0, 0), y1 = std::min<int>(y1, static_cast<int>(fb_stale_.size()));
+  for (int y = y0; y < y1; ++y) fb_stale_[static_cast<size_t>(y)] = 0;
+}
+
+void Ui::repair_stale(int y0, int y1) {
+  y0 = std::max(y0, 0), y1 = std::min<int>(y1, static_cast<int>(fb_stale_.size()));
+  if (y1 <= y0 || wisp_fb_.empty()) return;
+  Canvas c = canvas();
+  for (int y = y0; y < y1; ++y) {
+    if (!fb_stale_[static_cast<size_t>(y)]) continue;
+    c.blit(0, y, info_.width, 1, wisp_px() + static_cast<size_t>(y) * info_.width);
+    fb_stale_[static_cast<size_t>(y)] = 0;
+  }
+}
+
+bool Ui::send_face_direct(int y0, int y1) {
+  // Only a plain panel with a whole framebuffer: no ring, no offset, no bands.
+  if (ox_ || oy_ || panel_.round || display_.framebuffer_rows() > 0 || y1 <= y0) return false;
+  if (fb_stale_.size() != info_.height) fb_stale_.assign(info_.height, 0);
+  if (any_stale_) repair_stale(y0 - 1, y0), repair_stale(y1, y1 + 1);  // rows the panel may add
+  const uint64_t t0 = clock_ ? clock_->now_us() : 0;
+  if (!display_.flush_from(wisp_px(), static_cast<uint16_t>(y0), static_cast<uint16_t>(y1))) return false;
+  if (clock_) {
+    const uint64_t us = clock_->now_us() - t0;
+    if (stats_) flush_us_ += us, ++bands_;
+    wisp_timing_.direct_rows += y1 - y0, ++wisp_timing_.directs;
+  }
+  for (int y = y0; y < y1; ++y) fb_stale_[static_cast<size_t>(y)] = 1;
+  any_stale_ = true;
+  return true;
+}
+
 void Ui::push(int y0, int y1) {
+  if (any_stale_) repair_stale(y0 - 1 - oy_, y1 + 1 - oy_);
   paint_ring(y0, y1);  // the ring goes over whatever these rows drew
   send(y0, y1);
 }
@@ -527,6 +562,11 @@ void Ui::draw_frame(const UiModel& m) {
   // A display that holds only a band of rows cannot resend rows it missed, so it
   // asks for the whole screen again rather than leave a stale band on the panel.
   if (display_.take_redraw_request()) valid_ = false;
+  if (any_stale_ && (!valid_ || !m.hero || !m.wisp)) {
+    // Leaving the face (or repainting everything): every row is drawn again from scratch.
+    std::fill(fb_stale_.begin(), fb_stale_.end(), uint8_t(0));
+    any_stale_ = false;
+  }
   // The edge ring (round panels). One that appears or goes repaints the panel once: without a
   // ring the bands own its pixels in the UI square's corners. A banded framebuffer no longer
   // holds the rows a change would resend, so any change repaints it. Otherwise only the
@@ -650,7 +690,18 @@ void Ui::draw_frame(const UiModel& m) {
     }
     hero_text_ = text;
     if (redraw && m.wisp) ++(y0 == y_header && y1 == y_bottom ? wisp_timing_.full_bands : wisp_timing_.row_bands);
-    if (redraw) draw_bands(y0, y1, &Ui::draw_hero, m);
+    if (redraw && m.wisp && valid_ && hero_valid_ && stat == hero_static_) {
+      // Only the face's rows (and maybe the text's): the face's go straight from its buffer,
+      // the text's rows are drawn over the face as before.
+      const int t0 = std::max(y0, wisp_text_top());
+      if (t0 > y0 && send_face_direct(y0, std::min(y1, t0))) {
+        if (y1 > t0) draw_bands(t0, y1, &Ui::draw_hero, m);
+      } else {
+        draw_bands(y0, y1, &Ui::draw_hero, m);
+      }
+    } else if (redraw) {
+      draw_bands(y0, y1, &Ui::draw_hero, m);
+    }
     hero_static_ = stat;
     hero_anim_ = anim;
     hero_valid_ = true;

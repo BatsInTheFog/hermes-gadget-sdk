@@ -217,6 +217,8 @@ class Ui {
   struct WispTiming {
     uint64_t compose_us = 0, copy_us = 0, text_us = 0, copy_rows = 0, mouth_compose_us = 0;
     uint32_t composes = 0, copies = 0, texts = 0, full_bands = 0, row_bands = 0, mouth_composes = 0;
+    uint64_t direct_rows = 0;  // face rows sent straight from the face buffer
+    uint32_t directs = 0;
   };
   const WispTiming& wisp_timing() const { return wisp_timing_; }
   void reset_wisp_timing() { wisp_timing_ = WispTiming{}; }
@@ -358,6 +360,13 @@ class Ui {
   int wisp_c0_ = 0, wisp_c1_ = 0;            // the face's changed rows in this draw
   uint16_t* wisp_px() { return wisp_shown_ ? wisp_fb2_.data() : wisp_fb_.data(); }
   void wisp_changed(const UiModel& m, int& y0, int& y1);
+  // Face rows sent straight from the face buffer (Display::flush_from) are out of date in the
+  // framebuffer: marked here, and copied in before any send that could include them.
+  std::vector<uint8_t> fb_stale_;
+  bool any_stale_ = false;
+  bool send_face_direct(int y0, int y1);
+  void repair_stale(int y0, int y1);
+  void clear_stale(int y0, int y1);
   const WispFaceRenderer* wisp_from_ = nullptr;
   uint32_t wisp_frame_ = 0;
   WispTiming wisp_timing_;

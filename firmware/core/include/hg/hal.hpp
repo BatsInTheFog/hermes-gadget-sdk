@@ -64,6 +64,13 @@ class Display {
   // (a transfer was lost and this display cannot hold the rows to resend them).
   // The UI answers it by redrawing the whole screen.
   virtual bool take_redraw_request() { return false; }
+  // Sends rows [y0, y1) straight from `px` (native RGB565, the UI's width, row 0 at the UI's
+  // row 0) instead of from the framebuffer, which keeps its old rows (any extra rows the panel
+  // needs come from the framebuffer). False: not supported, nothing sent.
+  virtual bool flush_from(const uint16_t* px, uint16_t y0, uint16_t y1) {
+    (void)px, (void)y0, (void)y1;
+    return false;
+  }
 };
 
 // Microphone: after start() succeeds, the port delivers mono PCM16 samples at

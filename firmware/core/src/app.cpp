@@ -1205,9 +1205,11 @@ void App::face_tick_async(uint32_t t) {
   }
   auto show_it = [&] {
     if (!show) return;
-    const uint32_t r0 = now();
+    const uint64_t r0 = hal_.system->now_us();
     render(model_);
-    face_render_ms_ = now() - r0;
+    const uint32_t us = static_cast<uint32_t>(hal_.system->now_us() - r0);
+    face_render_ms_ = (us + 500) / 1000;
+    face_show_total_us_ += us, ++face_shows_, face_show_max_us_ = std::max(face_show_max_us_, us);
   };
   if (face_job_.load(std::memory_order_acquire) != 0) return show_it();  // still composing
   if (!model_.wisp || display_sleeping_ || !ui_) {
@@ -1254,8 +1256,9 @@ std::string App::wisp_timing_json() const {
          ",\"copy_rows\":" + avg(w.copy_rows, w.copies) + ",\"text_us\":" + avg(w.text_us, w.texts) +
          ",\"composes\":" + std::to_string(w.composes) + ",\"mouth_compose_us\":" + avg(w.mouth_compose_us, w.mouth_composes) +
          ",\"full_bands\":" + std::to_string(w.full_bands) +
-         ",\"row_bands\":" + std::to_string(w.row_bands) +
-         ",\"worker_compose_us\":" + avg(face_job_total_us_, face_jobs_) + ",\"show_ms\":" + std::to_string(face_render_ms_) + "}";
+         ",\"row_bands\":" + std::to_string(w.row_bands) + ",\"direct_rows\":" + avg(w.direct_rows, w.directs) +
+         ",\"worker_compose_us\":" + avg(face_job_total_us_, face_jobs_) + ",\"show_ms\":" + std::to_string(face_render_ms_) +
+         ",\"show_us\":" + avg(face_show_total_us_, face_shows_) + ",\"show_max_us\":" + std::to_string(face_show_max_us_) + "}";
 }
 
 void App::reveal_bars() {
@@ -3329,7 +3332,7 @@ std::string App::console(std::string_view raw) {
     WispState s;
     if (rest == "timing reset") {
       if (ui_) ui_->reset_wisp_timing();
-      face_job_total_us_ = 0, face_jobs_ = 0;
+      face_job_total_us_ = 0, face_jobs_ = 0, face_show_total_us_ = 0, face_shows_ = 0, face_show_max_us_ = 0;
       return "@ok face timing reset";
     }
     if (rest == "auto") face_forced_ = false;

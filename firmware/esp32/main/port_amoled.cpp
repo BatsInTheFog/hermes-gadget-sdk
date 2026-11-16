@@ -272,7 +272,26 @@ bool AmoledDisplay::begin(const AmoledConfig& cfg) {
       cfg.height, kBounceRows, 100,
       [this](int y, int rows) {
         const int w = cfg_.width;
-        std::memcpy(bounce_, fb_ + static_cast<size_t>(y) * w, static_cast<size_t>(rows) * w * 2);
+        if (!src_ || y >= src_y1_ || y + rows <= src_y0_) {
+          std::memcpy(bounce_, fb_ + static_cast<size_t>(y) * w, static_cast<size_t>(rows) * w * 2);
+        } else {
+          // flush_from: its rows from its buffer, swapped to the panel's byte order on the way
+          // (two pixels a word); any others from the framebuffer.
+          for (int r = 0; r < rows; ++r) {
+            const int yy = y + r;
+            uint16_t* out = bounce_ + static_cast<size_t>(r) * w;
+            if (yy < src_y0_ || yy >= src_y1_) {
+              std::memcpy(out, fb_ + static_cast<size_t>(yy) * w, static_cast<size_t>(w) * 2);
+              continue;
+            }
+            const uint32_t* in = reinterpret_cast<const uint32_t*>(src_ + static_cast<size_t>(yy) * w);
+            uint32_t* o = reinterpret_cast<uint32_t*>(out);
+            for (int i = 0; i < w / 2; ++i) {
+              const uint32_t v = in[i];
+              o[i] = ((v & 0x00FF00FFu) << 8) | ((v >> 8) & 0x00FF00FFu);
+            }
+          }
+        }
         const int x0 = cfg_.gap_x, x1 = cfg_.gap_x + w - 1;
         const int ya = y + cfg_.gap_y, yb = y + rows - 1 + cfg_.gap_y;
         const uint8_t cols[4] = {static_cast<uint8_t>(x0 >> 8), static_cast<uint8_t>(x0), static_cast<uint8_t>(x1 >> 8),
@@ -329,11 +348,24 @@ hg::DisplayInfo AmoledDisplay::info() const {
   return di;
 }
 
-void AmoledDisplay::flush(uint16_t y0, uint16_t y1) {
+void AmoledDisplay::flush(uint16_t y0, uint16_t y1) { flush_rows(y0, y1); }
+
+void AmoledDisplay::flush_rows(uint16_t y0, uint16_t y1) {
   // Even start and even span: widen the dirty rows by at most one on each side.
   const int top = y0 & ~1;
   const int bottom = std::min<int>(cfg_.height, (y1 + 1) & ~1);
-  report_band_event(TAG, bands_->flush(top, bottom));
+  const hg::BandFlush::Event ev = bands_->flush(top, bottom);
+  // Resuming resends the framebuffer, whose face rows may be out of date: ask for a repaint.
+  if (ev == hg::BandFlush::Event::Resumed) redraw_ = true;
+  report_band_event(TAG, ev);
+}
+
+bool AmoledDisplay::flush_from(const uint16_t* px, uint16_t y0, uint16_t y1) {
+  if (!px || (cfg_.width & 1)) return false;
+  src_ = px, src_y0_ = y0, src_y1_ = y1;
+  flush_rows(y0, y1);
+  src_ = nullptr;
+  return true;
 }
 
 void AmoledDisplay::set_backlight(uint8_t percent) {

@@ -946,6 +946,8 @@ private:
   uint64_t face_job_total_us_ = 0;
   uint32_t face_jobs_ = 0;
   uint32_t face_render_ms_ = 0;          // the last showing of a composed frame (copy and send)
+  uint64_t face_show_total_us_ = 0;
+  uint32_t face_shows_ = 0, face_show_max_us_ = 0;
   int face_buf_ = 0;                     // the buffer the worker composes into (the other shows)
   int face_job_c0_ = 0, face_job_c1_ = 0;    // the rows the worker's last frame changed
   int face_sync_c0_ = 0, face_sync_c1_ = 0;  // ...which it copies into the other buffer first
