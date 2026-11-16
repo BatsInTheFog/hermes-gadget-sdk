@@ -18,6 +18,7 @@
 #include "hg/i18n.hpp"
 #include "hg/mascot.hpp"
 #include "hg/qr.hpp"
+#include "hg/wisp_face.hpp"
 
 namespace hg {
 
@@ -103,6 +104,9 @@ struct UiModel {
   // The top bar and the bottom bar are drawn; false leaves both bands dark (the layout
   // keeps their rows, so nothing else moves when they come back).
   bool chrome = true;
+  // Hero screens: Wisp's face drawn over the whole panel instead of the mascot, with the
+  // headline and the first detail line near the bottom. Borrowed from the app; null: mascot.
+  const WispFaceRenderer* wisp = nullptr;
   std::string yes, no;   // answer buttons under the hero caption (Prompt screen)
   // Show the mascot as large as fits, with headline/detail as a caption,
   // instead of the header + text layout.
@@ -327,6 +331,11 @@ class Ui {
   DisplayInfo panel_;
   DisplayInfo info_;
   uint16_t bg_;  // background colour (see DisplayInfo::emissive)
+  // Wisp's face, composed for the whole panel (native RGB565), and what it was composed from.
+  std::vector<uint16_t> wisp_fb_;
+  const WispFaceRenderer* wisp_from_ = nullptr;
+  void ensure_wisp(const UiModel& m);
+  void blit_wisp(Canvas& c, int y0, int y1);
   int ox_ = 0, oy_ = 0;  // area origin on the panel
   // First panel row the framebuffer covers right now (see draw_bands); 0 unless
   // the display holds only a band of rows.

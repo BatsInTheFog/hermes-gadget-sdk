@@ -2,6 +2,7 @@
 #include "hgsim.h"
 
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -194,6 +195,7 @@ int copy_out(const std::string& s, char* out, size_t cap) {
 }  // namespace
 
 struct hgsim {
+  std::vector<uint8_t> face_asset;  // wisp_face.bin from HG_WISP_FACE; before `app`, which reads it
   std::unique_ptr<SimHal> hal_impl;
   std::unique_ptr<SimUpdater> updater;
   SimPower power;
@@ -251,6 +253,24 @@ hgsim* hgsim_create(const hgsim_config* cfg, const hgsim_host* host) {
     // The 1.8" AMOLED profile mirrors the V1 board's touch UI (board.cpp): bars hidden until a
     // swipe, swipe left for the conversation. Keyed on the name to keep the host ABI unchanged.
     if (profile.board == "sim-368x448") profile.autohide_bars = profile.chat_view = true;
+  }
+  // Wisp's packed face art, when HG_WISP_FACE names the file (the 1.8" profile only).
+  if (profile.board == "sim-368x448") {
+    if (const char* path = std::getenv("HG_WISP_FACE")) {
+      if (FILE* f = std::fopen(path, "rb")) {
+        std::fseek(f, 0, SEEK_END);
+        const long size = std::ftell(f);
+        std::fseek(f, 0, SEEK_SET);
+        if (size > 0) {
+          sim->face_asset.resize(static_cast<size_t>(size));
+          if (std::fread(sim->face_asset.data(), 1, sim->face_asset.size(), f) != sim->face_asset.size())
+            sim->face_asset.clear();
+        }
+        std::fclose(f);
+      }
+      profile.face_asset = sim->face_asset.empty() ? nullptr : sim->face_asset.data();
+      profile.face_asset_size = sim->face_asset.size();
+    }
   }
   profile.motion_sensor = cfg->motion != 0;
   profile.colour_face_alloc = std::malloc;

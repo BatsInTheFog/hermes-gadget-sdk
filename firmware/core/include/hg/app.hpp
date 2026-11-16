@@ -24,6 +24,7 @@
 #include "hg/tones.hpp"
 #include "hg/ui.hpp"
 #include "hg/vad.hpp"
+#include "hg/wisp_face.hpp"
 
 namespace hg {
 
@@ -58,6 +59,10 @@ struct DeviceProfile {
   // A sideways swipe from right to left on the Ready screen opens the conversation so far
   // (what Hermes heard and its replies), and another closes it (App::toggle_chat).
   bool chat_view = false;
+  // Wisp's packed face art (wisp_face.bin, hg/wisp_face.hpp), kept alive by the port: the
+  // board maps its assets partition, the simulator reads a file. Null: Gadget's mascot.
+  const uint8_t* face_asset = nullptr;
+  size_t face_asset_size = 0;
   // The touchscreen's pixels per inch, so tap targets are about 7 mm tall; 0 assumes kDefaultTouchPpi.
   uint16_t touch_ppi = 0;
   static constexpr uint16_t kDefaultTouchPpi = 200;
@@ -892,6 +897,9 @@ class App {
 
   // frame timing: the running statistics while `perf` is on, and the bench
   std::unique_ptr<FrameStats> frame_stats_;
+  // Wisp's face, from DeviceProfile::face_asset; the renderer is ready only when the file loaded.
+  WispFace wisp_face_;
+  WispFaceRenderer wisp_renderer_;
   uint32_t frame_log_at_ = 0, frame_log_frames_ = 0;
   enum class Bench : uint8_t { None, Scroll, Mascot, Redraw, Settings };
   Bench bench_ = Bench::None, bench_last_ = Bench::None;  // running; the last one to run of `perf bench all`

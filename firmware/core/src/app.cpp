@@ -291,6 +291,13 @@ void App::begin() {
     log(LogLevel::Info, "generated a new device key");
   }
   device_id_ = proto::device_id_for_key(key_.data(), key_.size());
+  if (profile_.face_asset) {
+    std::string why;
+    if (wisp_face_.load(profile_.face_asset, profile_.face_asset_size, &why) && wisp_renderer_.begin(wisp_face_, &why))
+      log(LogLevel::Info, "Wisp face loaded: " + std::to_string(wisp_face_.part_count()) + " parts");
+    else
+      log(LogLevel::Warn, "Wisp face not used (" + why + "); showing the mascot");
+  }
   load_settings();
   agent_profile_ = setting("profile", "default");  // shown until Hermes confirms it; not a console setting
 
@@ -2536,6 +2543,7 @@ void App::update_model() {
   m.dash.clear();
   m.hero = false;
   m.chrome = true;  // every screen shows the bars unless the end of this decides otherwise
+  m.wisp = nullptr;
   m.name_target = false;
   m.caption_lines = 1;
   m.scroll = scroll_;
@@ -2864,6 +2872,11 @@ void App::update_model() {
         m.detail = tr(profile_.touch_screen ? Msg::ProfileSwipe : Msg::ProfileInSettings) +
                    ((sessions || timing) ? "\n" + m.detail : "");
         m.caption_lines = 2;
+      }
+      if (wisp_renderer_.ready()) {
+        // Wisp's own face and greeting on the idle screen.
+        m.wisp = &wisp_renderer_;
+        if (!switching) m.headline = "Hi, I'm " + (name_.empty() ? std::string("Wisp") : name_);
       }
     }
     if (chat_open_) {
