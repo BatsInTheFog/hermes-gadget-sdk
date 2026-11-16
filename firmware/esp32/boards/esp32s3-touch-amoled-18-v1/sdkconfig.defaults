@@ -25,3 +25,8 @@ CONFIG_LWIP_TCP_WND_DEFAULT=32768
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=32
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# Always ask the router for an address with a full DHCP discovery. Asking straight for
+# the last address (the base default) left this board without an address for minutes on
+# a Google mesh network that ignores a request for an address it didn't expect.
+# CONFIG_LWIP_DHCP_RESTORE_LAST_IP is not set
