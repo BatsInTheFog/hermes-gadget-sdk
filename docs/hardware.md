@@ -723,7 +723,7 @@ This port is written from Waveshare's published pinout and drivers. On the first
 
 Board option `esp32s3-touch-amoled-18`, for Waveshare's rectangular 1.8" board, V2 only (CO5300 display, CST820 touch): an ESP32-S3R8 (8 MB octal PSRAM) with 16 MB flash, a 368×448 AMOLED, one analog microphone, a speaker output and a battery. Nothing needs wiring; plug a small 8 Ω speaker into the **SPK** connector to hear replies.
 
-The V1 board uses a different panel and touch controller, and this image doesn't support it. The 1.75" models also need their own profile: different pins, a round panel and different codecs.
+The V1 board uses a different panel and touch controller, and this image doesn't support it; use [the V1 profile](#esp32-s3-touch-amoled-18-v1). The 1.75" models also need their own profile: different pins, a round panel and different codecs.
 
 | Part | Chip | Connection |
 |---|---|---|
@@ -760,6 +760,32 @@ A smoke test on a V2 board confirmed the boot, the display and the I2C devices, 
 5. **Speaker:** replies are clear and loud enough (`set volume 80`); no hiss between replies.
 
 The CO5300 start-up table comes from Waveshare's [board support package](https://github.com/waveshareteam/Waveshare-ESP32-components/tree/9f4030c6e5cb888ad4cc268bfa7584c93ad53e30/bsp/esp32_s3_touch_amoled_1_8) at commit `9f4030c`; see [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES.md).
+
+## ESP32-S3-Touch-AMOLED-1.8 V1
+
+Board option `esp32s3-touch-amoled-18-v1`, for the **V1** revision of the rectangular 1.8" board (SH8601 display, FT3168 touch). This port is experimental. It has not yet been run on a board. Everything except the display and touch controllers matches [the V2 board](#esp32-s3-touch-amoled-18): the same pins, ES8311 codec and analog microphone, AXP2101, TCA9554 resets, PWR key and controls. Don't flash the V2 image onto a V1 board, or this one onto a V2.
+
+| Part | Chip | Connection |
+|---|---|---|
+| Display | SH8601, QSPI, 40 MHz | CS 12, SCLK 11, D0–D3 4/5/6/7; reset through the TCA9554 (LCD_RST); no column offset |
+| Touch | FT3168 | I2C 0x38, read with the FT5x06 report format; reset through the TCA9554 (TOUCH_RST); INT 21 |
+| Everything else | | As on V2 (table above) |
+
+The display uses the same QSPI framing as the CO5300 (`AmoledPanel::Sh8601_368` in `port_amoled.cpp`), with the SH8601 table from xiaozhi-esp32's V1 board. Brightness is the panel's 0x51 command.
+
+**Build and flash it** with PlatformIO:
+
+```bash
+cd firmware/esp32
+pio run -e esp32s3-touch-amoled-18-v1 -t upload -t monitor
+```
+
+### First flash: what to check
+
+1. **Boot log:** `SH8601 368x432 ready`, `expander resets 0x07 ready`, `codecs: speaker ready, microphones ready (es8311 analog)` and `touch ready`. In the `diag` report, `i2c` should include `0x38` (FT3168), `0x18` (ES8311), `0x20` (TCA9554) and `0x34` (AXP2101).
+2. **Screen:** upright, not mirrored, correct colours (amber accents, not blue), no stripe or shift at any edge. A dark panel points at the start-up table; swapped colours at the byte order.
+3. **Touch:** holding the screen shows the listening waves and a swipe *down* cancels. If coordinates are mirrored, flip `touch.mirror_x`/`mirror_y` in `board.cpp`.
+4. **Microphone and speaker:** as on V2.
 
 ## ESP32-S3-Touch-AMOLED-2.06
 

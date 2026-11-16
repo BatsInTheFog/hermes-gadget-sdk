@@ -20,6 +20,8 @@ namespace {
 #define HG_BOARD_NAME "waveshare-esp32-s3-touch-amoled-1.43c"
 #elif CONFIG_HG_BOARD_AMOLED_18
 #define HG_BOARD_NAME "esp32s3-touch-amoled-1.8"
+#elif CONFIG_HG_BOARD_AMOLED_18_V1
+#define HG_BOARD_NAME "esp32s3-touch-amoled-1.8-v1"
 #elif CONFIG_HG_BOARD_AMOLED_206
 #define HG_BOARD_NAME "esp32s3-touch-amoled-2.06"
 #elif CONFIG_HG_BOARD_AMOLED_216
@@ -312,6 +314,57 @@ BoardConfig make() {
   b.touch.offset_y = 8;     // touch reports glass rows; the UI starts at row 8
   // The side PWR key goes to the AXP2101; its conditioned level is on expander pin P4,
   // high while pressed, as on the AMOLED-1.75. It acts as CANCEL.
+  b.pwr_key = {true, 0x20, 4, true};
+  b.axp2101 = true;
+  // TCA9554: P0 LCD_RST, P1 the panel's power rail, P2 TOUCH_RST, P4 the PWR key (input).
+  b.expander_reset = {0x20, 0x07, 20, 150};
+  b.buttons = {0, -1, -1, -1};  // BOOT also works as TALK
+  b.talk_label = "BOOT";
+  b.cancel_label = "Swipe down";
+  return b;
+}
+#elif CONFIG_HG_BOARD_AMOLED_18_V1
+// Waveshare ESP32-S3-Touch-AMOLED-1.8 (V1): the V2 board's pins, codec, PMIC and
+// TCA9554 with a different panel and touch controller: SH8601 (QSPI, no column
+// offset) and FT3168 (FT5x06 report, I2C 0x38, INT GPIO 21). Values follow
+// xiaozhi-esp32's waveshare/esp32-s3-touch-amoled-1.8 board (commit 1b7644a).
+// Pins: docs/hardware.md#esp32-s3-touch-amoled-18-v1
+BoardConfig make() {
+  BoardConfig b{};
+  b.name = kBoardName;
+  b.amoled.enabled = true;
+  b.amoled.width = 368;
+  b.amoled.height = 432;    // as on V2: the UI stays 8 rows clear of the rounded corners
+  b.amoled.cs = 12;
+  b.amoled.sclk = 11;
+  b.amoled.d0 = 4;
+  b.amoled.d1 = 5;
+  b.amoled.d2 = 6;
+  b.amoled.d3 = 7;
+  b.amoled.rst = -1;        // reset comes from the TCA9554 (LCD_RST, P0)
+  b.amoled.gap_x = 0;       // the SH8601's RAM matches the 368-wide glass
+  b.amoled.gap_y = 8;       // the 8-row inset at the top
+  b.amoled.corner_inset = 18;  // the top bar's text clears the rounded corners
+  b.amoled.panel = AmoledPanel::Sh8601_368;
+  b.i2c = {15, 14, 400000};
+  b.codec.enabled = true;
+  b.codec.mclk = 16;
+  b.codec.bclk = 9;
+  b.codec.ws = 45;
+  b.codec.dout = 8;
+  b.codec.din = 10;
+  b.codec.pa = 46;
+  b.codec.mic = MicCodec::Es8311;  // analog electret microphone into the ES8311 ADC
+  b.touch.enabled = true;
+  b.touch.ppi = 322;  // estimate (see TouchConfig::ppi)
+  b.touch.controller = TouchController::Ft5x06;  // the FT3168 sends the same report
+  b.touch.addr = 0x38;
+  b.touch.int_gpio = 21;    // pulses low on a report; an idle FT3168 dozes and refuses polls
+  b.touch.width = 368;
+  b.touch.height = 448;
+  b.touch.offset_y = 8;     // touch reports glass rows; the UI starts at row 8
+  // The side PWR key goes to the AXP2101; its conditioned level is on expander pin P4,
+  // high while pressed, as on V2. It acts as CANCEL.
   b.pwr_key = {true, 0x20, 4, true};
   b.axp2101 = true;
   // TCA9554: P0 LCD_RST, P1 the panel's power rail, P2 TOUCH_RST, P4 the PWR key (input).

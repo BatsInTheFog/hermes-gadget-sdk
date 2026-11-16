@@ -145,8 +145,9 @@ struct P4SpeakerConfig {
 // module uses that short table with a column offset of 8 and MADCTL 0xC0.
 // The rectangular 368x448 1.8" module, the 410x502 2.06" watch and the
 // 480x480 2.16" board use the shorter tables from Waveshare's board support
-// packages.
-enum class AmoledPanel { Co5300_466, Co5300_368, Co5300_410, Co5300_480, Co5300_132, Co5300_143c };
+// packages. The V1 1.8" module has an SH8601 instead (Sh8601_368), driven over
+// the same QSPI framing with its own table.
+enum class AmoledPanel { Co5300_466, Co5300_368, Co5300_410, Co5300_480, Co5300_132, Co5300_143c, Sh8601_368 };
 
 // QSPI AMOLED with a CO5300 controller (round 466x466, rectangular 368x448 or 410x502).
 struct AmoledConfig {

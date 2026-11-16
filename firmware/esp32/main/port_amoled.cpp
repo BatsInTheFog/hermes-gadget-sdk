@@ -1,5 +1,5 @@
 // QSPI AMOLED panel with a CO5300 controller (e.g. the round 466x466 1.75"
-// modules), driven directly through esp_lcd panel IO in quad mode.
+// modules) or the V1 1.8" module's SH8601, driven directly through esp_lcd panel IO in quad mode.
 //
 // Framing on the QSPI link: commands go out as (0x02 << 24) | (cmd << 8) with
 // their parameters; pixels as (0x32 << 24) | (RAMWR << 8). The controller only
@@ -115,6 +115,25 @@ constexpr InitCommand kInit368[] = {
     {0x2B, {0x00, 0x00, 0x01, 0xBF}, 4, 0},
     {0x11, {}, 0, 100},  // sleep out
     {0x29, {}, 0, 0},    // display on
+};
+
+// Panel bring-up for the V1 rectangular 368x448 1.8" module (SH8601 + FT3168),
+// following xiaozhi-esp32's waveshare/esp32-s3-touch-amoled-1.8 board (commit
+// 1b7644a): its vendor table, preceded by the MADCTL and COLMOD writes that
+// Espressif's esp_lcd_sh8601 driver sends before it. The SH8601 takes the same
+// QSPI framing as the CO5300 (0x02 commands, 0x32 pixels). No column offset;
+// every flush rewrites the window.
+constexpr InitCommand kInitSh8601_368[] = {
+    {0x36, {0x00}, 1, 0},        // memory access control (the driver's default)
+    {0x3A, {0x55}, 1, 0},        // 16 bits per pixel
+    {0x11, {}, 0, 120},          // sleep out
+    {0x44, {0x01, 0xD1}, 2, 0},  // tearing scan line
+    {0x35, {0x00}, 1, 0},        // tearing effect line on
+    {0x53, {0x20}, 1, 10},       // brightness control on
+    {0x2A, {0x00, 0x00, 0x01, 0x6F}, 4, 0},
+    {0x2B, {0x00, 0x00, 0x01, 0xBF}, 4, 0},
+    {0x51, {0xFF}, 1, 10},       // brightness
+    {0x29, {}, 0, 10},           // display on
 };
 
 // Panel bring-up for the 410x502 2.06" watch module, following Waveshare's
@@ -237,6 +256,9 @@ bool AmoledDisplay::begin(const AmoledConfig& cfg) {
   } else if (cfg.panel == AmoledPanel::Co5300_480) {
     init = kInit480;
     init_len = sizeof(kInit480) / sizeof(kInit480[0]);
+  } else if (cfg.panel == AmoledPanel::Sh8601_368) {
+    init = kInitSh8601_368;
+    init_len = sizeof(kInitSh8601_368) / sizeof(kInitSh8601_368[0]);
   }
   for (size_t i = 0; i < init_len; ++i) {
     command(init[i].cmd, init[i].data, init[i].len);
@@ -263,7 +285,7 @@ bool AmoledDisplay::begin(const AmoledConfig& cfg) {
                ESP_OK;
       },
       [this](uint32_t ms) { return xSemaphoreTake(done_, pdMS_TO_TICKS(ms)) == pdTRUE; });
-  ESP_LOGI(TAG, "CO5300 %ux%u ready", cfg.width, cfg.height);
+  ESP_LOGI(TAG, "%s %ux%u ready", cfg.panel == AmoledPanel::Sh8601_368 ? "SH8601" : "CO5300", cfg.width, cfg.height);
   return true;
 }
 
