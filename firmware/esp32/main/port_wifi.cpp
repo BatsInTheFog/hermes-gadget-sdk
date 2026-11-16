@@ -67,6 +67,11 @@ bool Wifi::configure(const std::string& ssid, const std::string& password, const
   cfg.sta.pmf_cfg.capable = true;
   // Asked for when joining; only max modem sleep uses it (wifi_power.hpp).
   cfg.sta.listen_interval = hg::WifiPowerSave::kListenInterval;
+  // A join that names no access point scans every channel and takes the strongest
+  // one with this name. ESP-IDF's default fast scan takes the first it hears, which on
+  // a mesh network can be a distant node; fast join would then keep returning to it.
+  cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+  cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
   if (aim) {
     // The access point that last worked, on its channel: no scan first (wifi_fast.hpp).
     cfg.sta.bssid_set = true;
@@ -109,6 +114,13 @@ bool Wifi::configure(const std::string& ssid, const std::string& password, const
 void Wifi::remember_ap() {
   wifi_ap_record_t ap = {};
   if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return;
+  // Don't aim the next join at an access point heard this faintly: forget it, so the
+  // next join scans and picks the strongest one (often a nearer mesh node).
+  constexpr int8_t kWeakRssi = -75;
+  if (ap.rssi < kWeakRssi) {
+    if (fast_.forget()) storage_->erase(hg::WifiFastJoin::kStorageKey);
+    return;
+  }
   hg::WifiFastAp seen;
   seen.ssid = ssid_;
   std::memcpy(seen.bssid, ap.bssid, sizeof(seen.bssid));
