@@ -274,6 +274,19 @@ void Wifi::tick(hg::App& app, uint32_t now) {
 
 void Wifi::attempt(uint32_t now) {
   scanning_ = false;
+  // Associated, yet no address came before this retry: a distant mesh node can hold the
+  // link up while DHCP never finishes, and connecting again over it only fails ("sta is
+  // connected"). Forget the remembered access point and leave; the disconnect retries
+  // with a full scan for the strongest one.
+  wifi_ap_record_t current = {};
+  if (!joining_ && !link_up_ && esp_wifi_sta_get_ap_info(&current) == ESP_OK) {
+    ESP_LOGW("hg.wifi", "no address from %02x:%02x:%02x:%02x:%02x:%02x (rssi %d); rejoining by scan",
+             current.bssid[0], current.bssid[1], current.bssid[2], current.bssid[3], current.bssid[4],
+             current.bssid[5], current.rssi);
+    if (fast_.forget()) storage_->erase(hg::WifiFastJoin::kStorageKey);
+    if (esp_wifi_disconnect() != ESP_OK) retry_.start_failed(now);
+    return;
+  }
   // Not while a phone setup tries its network.
   if (!joining_ && pick_.should_scan()) {
     wifi_scan_config_t scan = {};
