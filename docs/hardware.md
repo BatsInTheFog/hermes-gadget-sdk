@@ -775,6 +775,8 @@ The display uses the same QSPI framing as the CO5300 (`AmoledPanel::Sh8601_368` 
 
 The glass is 368×448. As on V2, the UI draws 368×432 (`amoled.height = 432`, `gap_y = 8`): the panel's window covers all 448 rows, the top and bottom 8 rows are blanked once at start-up, and the UI keeps clear of the rounded corners. Hence `368x432` in the boot log. Set `height = 448` and `gap_y = 0` (and `touch.offset_y = 0`) for a full-glass UI.
 
+This board has its own 16 MB partition table (`boards/esp32s3-touch-amoled-18-v1/partitions.csv`): two 6 MB app slots, a 64 KB core dump and a 3.8 MB `assets` data partition. `nvs`, `otadata` and `phy_init` stay at the shared table's addresses, so settings and pairing survive the switch. Moving a board onto this table, or off it, takes a USB flash; an over-the-air update can't change partitions.
+
 **Build and flash it** with PlatformIO:
 
 ```bash

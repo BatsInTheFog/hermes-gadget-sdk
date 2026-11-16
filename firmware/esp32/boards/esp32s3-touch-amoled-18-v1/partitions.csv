@@ -1,0 +1,13 @@
+# 16 MB layout for the Waveshare ESP32-S3-Touch-AMOLED-1.8 V1 (Wisp).
+# nvs, otadata and phy_init keep the shared table's addresses (firmware/esp32/partitions.csv),
+# so settings, pairing and Wi-Fi survive moving to this table. Two 6 MB app slots keep
+# over-the-air updates; "assets" holds data such as face art; "coredump" keeps a crash
+# report for diagnosis.
+# Name,    Type, SubType,  Offset,   Size
+nvs,       data, nvs,      0x9000,   0x6000
+otadata,   data, ota,      0xf000,   0x2000
+phy_init,  data, phy,      0x11000,  0x1000
+ota_0,     app,  ota_0,    0x20000,  0x600000
+ota_1,     app,  ota_1,    0x620000, 0x600000
+coredump,  data, coredump, 0xc20000, 0x10000
+assets,    data, spiffs,   0xc30000, 0x3d0000
