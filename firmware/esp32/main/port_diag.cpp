@@ -6,6 +6,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "esp_app_desc.h"
@@ -152,6 +153,43 @@ hg::json::Value stacks() {
   return out;
 }
 
+// Each task's share of a core since the last `diag` (run-time stats): who keeps the CPU busy.
+hg::json::Value cpu() {
+  hg::json::Value out = hg::json::Value::array();
+#if CONFIG_FREERTOS_USE_TRACE_FACILITY && CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+  static std::vector<std::pair<std::string, uint32_t>> last;
+  static int64_t last_us = 0;
+  std::vector<TaskStatus_t> tasks(uxTaskGetNumberOfTasks() + 4);
+  tasks.resize(uxTaskGetSystemState(tasks.data(), tasks.size(), nullptr));
+  const int64_t now = esp_timer_get_time();
+  const int64_t span = last_us ? now - last_us : 0;
+  std::vector<std::pair<std::string, uint32_t>> next;
+  std::vector<std::pair<uint32_t, hg::json::Value>> rows;
+  for (const auto& t : tasks) {
+    const uint32_t c = static_cast<uint32_t>(t.ulRunTimeCounter);
+    next.push_back({t.pcTaskName, c});
+    uint32_t was = 0;
+    bool seen = false;
+    for (const auto& l : last)
+      if (l.first == t.pcTaskName) was = l.second, seen = true;
+    if (!seen || span <= 0) continue;
+    const uint32_t d = c - was;
+    hg::json::Value o = hg::json::Value::object();
+    o.set("name", t.pcTaskName).set("pct", static_cast<int>((static_cast<int64_t>(d) * 1000 / span + 5) / 10));
+#if CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID
+    o.set("core", t.xCoreID == tskNO_AFFINITY ? -1 : static_cast<int>(t.xCoreID));  // pinned to (-1: either)
+#endif
+    o.set("prio", static_cast<int>(t.uxCurrentPriority));
+    rows.push_back({d, o});
+  }
+  std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+  for (auto& r : rows) out.push(r.second);
+  last = std::move(next);
+  last_us = now;
+#endif
+  return out;
+}
+
 }  // namespace
 
 void begin() {
@@ -205,7 +243,8 @@ void report(hg::json::Value& r) {
       .set("wifi", wifi())
       .set("parts", parts)
       .set("i2c", i2c_scan())
-      .set("stacks", stacks());
+      .set("stacks", stacks())
+      .set("cpu", cpu());
   if (g_parts.motion) {
     int16_t x = 0, y = 0, z = 0;
     g_parts.motion->latest(x, y, z);

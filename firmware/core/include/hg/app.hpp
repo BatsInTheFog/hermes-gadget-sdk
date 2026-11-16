@@ -239,6 +239,16 @@ class App {
   bool chat_swipe_live() const;
   void toggle_chat();
   bool chat_open() const { return chat_open_; }
+  // The chat view's scrolling (TouchGestures): a drag moves the conversation with the finger,
+  // a line at a time, and the lift's speed carries on as momentum that slows to a stop.
+  // chat_top_edge: y is in the strip along the top (the bar and the title), where a swipe down
+  // closes the view instead of scrolling it.
+  bool chat_scroll_live() const { return chat_open_ && chat_swipe_live(); }
+  bool chat_top_edge(int y) const;
+  void chat_drag_begin();
+  void chat_drag(int dy_px);
+  void chat_fling(float px_per_s);
+  bool chat_flinging() const { return chat_fling_v_ != 0; }
   // The conversation kept for the chat view: the newest kMaxChatLines lines.
   struct ChatLine {
     bool user = false;
@@ -830,6 +840,13 @@ class App {
   std::string chat_reply_turn_;  // the turn whose reply is chat_'s last line, so a resend replaces it
   bool chat_open_ = false;
   int chat_scroll_ = -1;
+  int chat_drag_first_ = 0;                     // the first line shown when the drag (or fling) began
+  float chat_fling_v_ = 0, chat_fling_px_ = 0;  // momentum: px/s (down: older lines) and travel so far
+  uint32_t chat_fling_at_ = 0;
+  int chat_line_px() const;
+  int chat_max_first() const;
+  bool chat_set_first(int first);
+  void chat_fling_tick(uint32_t t);
   void chat_add(bool user, const std::string& text, const std::string& turn = std::string());
   std::string chat_text() const;
   uint32_t page_at_ = 0;  // when long text turns its next page

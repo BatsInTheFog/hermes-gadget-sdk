@@ -435,6 +435,8 @@ class AmoledDisplay final : public hg::Display {
   esp_lcd_panel_io_handle_t io_ = nullptr;
   uint16_t* fb_ = nullptr;
   uint16_t* bounce_ = nullptr;
+  uint16_t* bounce2_ = nullptr;  // the second staging buffer (null: one, not pipelined)
+  int next_bounce_ = 0;
   SemaphoreHandle_t done_ = nullptr;
   std::optional<hg::BandFlush> bands_;
   bool panel_on_ = true;

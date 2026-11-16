@@ -20,6 +20,13 @@ CONFIG_HG_BOARD_AMOLED_18_V1=y
 # (boards/esp32s3-touch-amoled-18-v1/partitions.csv). Changing tables needs a USB flash.
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/esp32s3-touch-amoled-18-v1/partitions.csv"
 
+# Wisp's face streams through PSRAM (composed on one core, sent from the other): 64-byte cache
+# lines fetch twice as much per miss, at no extra internal RAM. Run-time stats let `diag`
+# show each task's share of the CPU ("cpu").
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
+
 # TCP windows for links with a long round trip (a phone hotspot): 5,760 B capped
 # a connection near 33 KB/s at 175 ms, below 24 kHz audio's 48 KB/s.
 # Wi-Fi and lwIP buffers in PSRAM first, internal RAM when the module has none.

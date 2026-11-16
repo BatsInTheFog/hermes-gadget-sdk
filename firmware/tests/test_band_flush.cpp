@@ -69,3 +69,31 @@ TEST("BandFlush: a submit error stops drawing for good") {
   CHECK(p.bands.flush(0, 60) == Event::None);
   CHECK(p.ops.empty());
 }
+
+TEST("BandFlush: pipelined, bands go out back to back and only the last is waited for") {
+  std::vector<std::string> ops;
+  std::deque<bool> completions;
+  hg::BandFlush bands{60, 20, 50,
+                      [&](int y, int rows) {
+                        ops.push_back("draw " + std::to_string(y) + "+" + std::to_string(rows));
+                        return true;
+                      },
+                      [&](uint32_t ms) {
+                        ops.push_back("wait " + std::to_string(ms));
+                        if (completions.empty()) return true;
+                        const bool done = completions.front();
+                        completions.pop_front();
+                        return done;
+                      },
+                      true};
+  CHECK(bands.flush(10, 55) == Event::None);
+  CHECK(ops == Ops({"draw 10+20", "draw 30+20", "draw 50+5", "wait 50"}));
+  // A late last band pauses, and the next flush resends everything once it lands.
+  ops.clear();
+  completions = {false};
+  CHECK(bands.flush(0, 20) == Event::TimedOut);
+  completions = {true};
+  ops.clear();
+  CHECK(bands.flush(0, 10) == Event::Resumed);
+  CHECK(ops == Ops({"wait 0", "draw 0+20", "draw 20+20", "draw 40+20", "wait 50"}));
+}

@@ -10,6 +10,9 @@ namespace hg {
 // Sends framebuffer rows to an LCD a band at a time through one DMA staging
 // buffer. The DMA owns that buffer from a successful submit until the
 // transfer's completion arrives, so the buffer is never refilled before then.
+// Pipelined: the port alternates two staging buffers and its submit itself waits
+// for the transfer before (the bus serialises them), so a band is filled while
+// the last one goes out; only the final band is waited for here.
 // A late completion pauses drawing until it arrives; a submit error stops
 // drawing until reboot. Neither waits longer than one timeout.
 class BandFlush {
@@ -20,9 +23,9 @@ class BandFlush {
   using Wait = std::function<bool(uint32_t timeout_ms)>;
   enum class Event { None, TimedOut, Resumed, Failed };
 
-  BandFlush(int height, int band_rows, uint32_t timeout_ms, Submit submit, Wait wait)
+  BandFlush(int height, int band_rows, uint32_t timeout_ms, Submit submit, Wait wait, bool pipelined = false)
       : height_(height), band_rows_(band_rows), timeout_ms_(timeout_ms),
-        submit_(std::move(submit)), wait_(std::move(wait)) {}
+        submit_(std::move(submit)), wait_(std::move(wait)), pipelined_(pipelined) {}
 
   Event flush(int y0, int y1) {
     Event event = Event::None;
@@ -41,6 +44,7 @@ class BandFlush {
         state_ = State::Failed;
         return Event::Failed;
       }
+      if (pipelined_ && y + band_rows_ < y1) continue;  // the next submit waits for this one
       if (!wait_(timeout_ms_)) {
         state_ = State::Pending;
         return Event::TimedOut;
@@ -56,6 +60,7 @@ class BandFlush {
   uint32_t timeout_ms_;
   Submit submit_;
   Wait wait_;
+  bool pipelined_;
   State state_ = State::Ready;
 };
 

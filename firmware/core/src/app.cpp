@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -1217,16 +1218,15 @@ void App::face_tick_async(uint32_t t) {
     return show_it();
   }
   apply_face_want();
-  // What to compose next. Speaking a reply: the whole face ~10 a second and the mouth lane in
-  // between; otherwise whole frames at up to kFaceFrameMs. Showing a frame costs the app task
-  // face_render_ms_, so frames come no closer than a quarter more than that.
+  // What to compose next: whole frames at up to kFaceFrameMs (the mouth moves in each one,
+  // speaking or not), kFaceClockFrameMs on the resting clock. Showing a frame costs the app task
+  // face_render_ms_, so frames come no closer than a quarter more than that. Should whole frames
+  // fall behind while she speaks, the mouth lane fills the gaps.
   const bool replying = model_.screen == Screen::Responding && wisp_renderer_.state() == WispState::Speaking;
   const bool lane = replying && speaking();
   const uint32_t ahead = face_job_us_ / 1000 + face_render_ms_;  // until this frame shows
   const uint32_t gap = face_render_ms_ + face_render_ms_ / 4;
-  const uint32_t full_every = lane                             ? kFaceSpeakFullMs
-                              : model_.screen == Screen::Clock ? kFaceClockFrameMs
-                                                               : kFaceFrameMs;
+  const uint32_t full_every = model_.screen == Screen::Clock ? kFaceClockFrameMs : kFaceFrameMs;
   if (t - face_full_at_ >= std::max(full_every, gap)) {
     if (replying) wisp_renderer_.set_talk_level(speaking() ? lip_level(t + ahead, t - face_at_) : 0.0f);
     else wisp_renderer_.set_talk_level(-1.0f);
@@ -1266,6 +1266,70 @@ void App::reveal_bars() {
   bars_until_ = now() + kBarsShowMs;
   if (!bars_until_) bars_until_ = 1;  // 0 means hidden
   update_model();
+}
+
+int App::chat_line_px() const { return ui_ ? std::max(1, Canvas::line_height(ui_->layout().scale)) : 16; }
+
+int App::chat_max_first() const {
+  if (!ui_) return 0;
+  const int total = static_cast<int>(wrap_text(chat_text(), ui_->layout().body_cols).size());
+  return std::max(0, total - ui_->body_rows(model_));
+}
+
+bool App::chat_set_first(int first) {
+  // Clamped to the conversation; the newest lines shown again means following new ones.
+  const int max_first = chat_max_first();
+  first = std::clamp(first, 0, max_first);
+  const int want = first == max_first ? -1 : first;
+  if (want == chat_scroll_) return false;
+  chat_scroll_ = want;
+  page_at_ = now() + kManualScrollPauseMs;
+  update_model();
+  return true;
+}
+
+bool App::chat_top_edge(int y) const {
+  if (!ui_) return false;
+  return y < ui_->layout().top_h + ui_->layout().header_h;
+}
+
+void App::chat_drag_begin() {
+  chat_fling_v_ = 0;  // a touch stops the momentum
+  chat_drag_first_ = chat_scroll_ < 0 ? chat_max_first() : chat_scroll_;
+}
+
+void App::chat_drag(int dy_px) {
+  // Down shows older lines: the text follows the finger.
+  const int lines = dy_px / chat_line_px();
+  chat_set_first(chat_drag_first_ - lines);
+}
+
+void App::chat_fling(float px_per_s) {
+  constexpr float kMinFling = 250;  // slower than this, the text just stops
+  chat_fling_v_ = std::fabs(px_per_s) >= kMinFling ? px_per_s : 0;
+  chat_fling_px_ = 0;
+  chat_fling_at_ = now();
+  chat_drag_first_ = chat_scroll_ < 0 ? chat_max_first() : chat_scroll_;
+}
+
+void App::chat_fling_tick(uint32_t t) {
+  if (!chat_open_) {
+    chat_fling_v_ = 0;
+    return;
+  }
+  // The speed falls by about two thirds every third of a second.
+  constexpr float kTauMs = 325, kStop = 40;
+  const float dt = static_cast<float>(t - chat_fling_at_);
+  if (dt <= 0) return;
+  chat_fling_at_ = t;
+  const float decay = std::exp(-dt / kTauMs);
+  chat_fling_px_ += chat_fling_v_ * kTauMs / 1000.0f * (1 - decay);  // travel over dt as it slows
+  chat_fling_v_ *= decay;
+  const int lines = static_cast<int>(chat_fling_px_ / static_cast<float>(chat_line_px()));
+  const int first = std::clamp(chat_drag_first_ - lines, 0, chat_max_first());
+  chat_set_first(first);
+  const bool at_end = first == 0 || first == chat_max_first();
+  if (std::fabs(chat_fling_v_) < kStop || (at_end && lines != 0)) chat_fling_v_ = 0;
 }
 
 bool App::chat_swipe_live() const {
@@ -2735,6 +2799,7 @@ void App::tick() {
     bars_until_ = 0;
     if (bars_shown_) update_model();
   }
+  if (chat_fling_v_ != 0) chat_fling_tick(t);
   // Wisp's face animates at its own rate while it is on screen (only its rows are redrawn).
   // At most every kFaceFrameMs, and at most about four fifths of the time: a frame that took
   // long waits a quarter as long again, so touch and the connection keep a share (audio plays

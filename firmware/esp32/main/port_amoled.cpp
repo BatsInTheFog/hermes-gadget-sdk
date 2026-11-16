@@ -199,6 +199,9 @@ bool AmoledDisplay::begin(const AmoledConfig& cfg) {
     ESP_LOGE(TAG, "not enough memory for a %ux%u framebuffer (is PSRAM enabled?)", cfg.width, cfg.height);
     return false;
   }
+  // A second staging buffer lets a band fill while the last one is sent; without the memory
+  // for it, bands go one at a time.
+  bounce2_ = static_cast<uint16_t*>(heap_caps_malloc(static_cast<size_t>(cfg.width) * kBounceRows * 2, MALLOC_CAP_DMA));
   std::memset(fb_, 0, px * 2);
   done_ = xSemaphoreCreateBinary();
 
@@ -272,14 +275,15 @@ bool AmoledDisplay::begin(const AmoledConfig& cfg) {
       cfg.height, kBounceRows, 100,
       [this](int y, int rows) {
         const int w = cfg_.width;
+        uint16_t* const bounce = bounce2_ && (next_bounce_ ^= 1) ? bounce2_ : bounce_;
         if (!src_ || y >= src_y1_ || y + rows <= src_y0_) {
-          std::memcpy(bounce_, fb_ + static_cast<size_t>(y) * w, static_cast<size_t>(rows) * w * 2);
+          std::memcpy(bounce, fb_ + static_cast<size_t>(y) * w, static_cast<size_t>(rows) * w * 2);
         } else {
           // flush_from: its rows from its buffer, swapped to the panel's byte order on the way
           // (two pixels a word); any others from the framebuffer.
           for (int r = 0; r < rows; ++r) {
             const int yy = y + r;
-            uint16_t* out = bounce_ + static_cast<size_t>(r) * w;
+            uint16_t* out = bounce + static_cast<size_t>(r) * w;
             if (yy < src_y0_ || yy >= src_y1_) {
               std::memcpy(out, fb_ + static_cast<size_t>(yy) * w, static_cast<size_t>(w) * 2);
               continue;
@@ -298,12 +302,14 @@ bool AmoledDisplay::begin(const AmoledConfig& cfg) {
                                  static_cast<uint8_t>(x1)};
         const uint8_t lines[4] = {static_cast<uint8_t>(ya >> 8), static_cast<uint8_t>(ya), static_cast<uint8_t>(yb >> 8),
                                   static_cast<uint8_t>(yb)};
+        // These wait for the band before to finish sending (the panel IO serialises them).
         command(0x2A, cols, 4);
         command(0x2B, lines, 4);
-        return esp_lcd_panel_io_tx_color(io_, static_cast<int>(kRamWrite), bounce_, static_cast<size_t>(rows) * w * 2) ==
+        xSemaphoreTake(done_, 0);  // that band's completion: the wait after this one is for this one
+        return esp_lcd_panel_io_tx_color(io_, static_cast<int>(kRamWrite), bounce, static_cast<size_t>(rows) * w * 2) ==
                ESP_OK;
       },
-      [this](uint32_t ms) { return xSemaphoreTake(done_, pdMS_TO_TICKS(ms)) == pdTRUE; });
+      [this](uint32_t ms) { return xSemaphoreTake(done_, pdMS_TO_TICKS(ms)) == pdTRUE; }, bounce2_ != nullptr);
   ESP_LOGI(TAG, "%s %ux%u ready", cfg.panel == AmoledPanel::Sh8601_368 ? "SH8601" : "CO5300", cfg.width, cfg.height);
   return true;
 }
