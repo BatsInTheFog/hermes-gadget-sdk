@@ -108,6 +108,9 @@ struct UiModel {
   // headline and the first detail line near the bottom. Borrowed from the app; null: mascot.
   const WispFaceRenderer* wisp = nullptr;
   uint32_t wisp_frame = 0;  // changes whenever the face moved
+  // The face composes on another core into the buffer wisp_target() lends (the UI only shows
+  // it), and is composing right now: the UI then draws nothing until it is done.
+  bool wisp_async = false, wisp_busy = false;
   std::string yes, no;   // answer buttons under the hero caption (Prompt screen)
   // Show the mascot as large as fits, with headline/detail as a caption,
   // instead of the header + text layout.
@@ -217,6 +220,10 @@ class Ui {
   };
   const WispTiming& wisp_timing() const { return wisp_timing_; }
   void reset_wisp_timing() { wisp_timing_ = WispTiming{}; }
+  // The face's buffer, for a renderer composing on another core, and marking a composed frame
+  // as the one to show (the UI then copies it instead of composing).
+  FaceFrame wisp_target();
+  void wisp_published(const WispFaceRenderer* r, uint32_t frame) { wisp_from_ = r, wisp_frame_ = frame; }
   // The area the UI draws in: the whole panel, or on a round panel the square
   // inscribed in it. Layout coordinates are relative to this area.
   const DisplayInfo& area() const { return info_; }

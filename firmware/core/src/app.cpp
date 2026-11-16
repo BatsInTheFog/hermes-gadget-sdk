@@ -1138,6 +1138,12 @@ void App::wisp_model(UiModel& m) {
     default: break;
   }
   if (!face) return;
+  m.wisp_async = profile_.face_async != nullptr;
+  m.wisp_busy = face_job_.load(std::memory_order_acquire) == 1;
+  if (m.wisp_busy) {  // composing on the worker: leave the renderer alone until it is done
+    m.wisp = &wisp_renderer_;
+    return;
+  }
   if (face_forced_) want = face_force_;
   if (wisp_renderer_.state() != want) wisp_renderer_.set_state(want);
   const int h = ui_ ? ui_->area().height : 448;
@@ -1148,6 +1154,65 @@ void App::wisp_model(UiModel& m) {
   m.wisp_frame = wisp_renderer_.frame();
 }
 
+void App::face_job_entry(void* arg) {
+  // On the worker's core: compose the stepped frame into the face buffer, then hand it back.
+  App* a = static_cast<App*>(arg);
+  const uint64_t t0 = a->hal_.system->now_us();
+  FaceFrame f = a->face_job_frame_;
+  a->wisp_renderer_.draw(f);
+  a->face_job_us_ = static_cast<uint32_t>(a->hal_.system->now_us() - t0);
+  a->face_job_.store(2, std::memory_order_release);
+}
+
+void App::face_tick_async(uint32_t t) {
+  // A composed frame: show it (copy and send, here on the app task).
+  if (face_job_.load(std::memory_order_acquire) == 2) {
+    face_job_total_us_ += face_job_us_, ++face_jobs_;
+    face_job_.store(0, std::memory_order_relaxed);
+    model_.wisp_busy = false;
+    if (model_.wisp && ui_ && !display_sleeping_) {
+      ui_->wisp_published(&wisp_renderer_, wisp_renderer_.frame());
+      model_.wisp_frame = wisp_renderer_.frame();
+      const uint32_t r0 = now();
+      render(model_);
+      face_render_ms_ = now() - r0;
+    }
+  }
+  if (face_job_.load(std::memory_order_acquire) != 0) return;  // still composing
+  if (!model_.wisp || display_sleeping_ || !ui_) {
+    face_at_ = face_full_at_ = t;
+    return;
+  }
+  // What to compose next. Speaking a reply: the whole face ~10 a second and the mouth lane in
+  // between; otherwise whole frames at up to kFaceFrameMs. Showing a frame costs the app task
+  // face_render_ms_, so frames come no closer than a quarter more than that.
+  const bool replying = model_.screen == Screen::Responding && wisp_renderer_.state() == WispState::Speaking;
+  const bool lane = replying && speaking();
+  const uint32_t ahead = face_job_us_ / 1000 + face_render_ms_;  // until this frame shows
+  const uint32_t gap = face_render_ms_ + face_render_ms_ / 4;
+  const uint32_t full_every = lane                             ? kFaceSpeakFullMs
+                              : model_.screen == Screen::Clock ? kFaceClockFrameMs
+                                                               : kFaceFrameMs;
+  if (t - face_full_at_ >= std::max(full_every, gap)) {
+    if (replying) wisp_renderer_.set_talk_level(speaking() ? lip_level(t + ahead, t - face_at_) : 0.0f);
+    else wisp_renderer_.set_talk_level(-1.0f);
+    wisp_renderer_.step(static_cast<float>(t - face_full_at_) / 1000.0f);
+    ++face_full_frames_;
+    face_at_ = face_full_at_ = t;
+  } else if (lane && t - face_at_ >= std::max(kFaceMouthMs, gap)) {
+    wisp_renderer_.set_talk_level(lip_level(t + ahead, t - face_at_));
+    wisp_renderer_.step_mouth();
+    ++face_mouth_frames_;
+    face_at_ = t;
+  } else {
+    return;
+  }
+  face_job_frame_ = ui_->wisp_target();
+  model_.wisp_busy = true;
+  face_job_.store(1, std::memory_order_release);
+  profile_.face_async(&App::face_job_entry, this);
+}
+
 std::string App::wisp_timing_json() const {
   if (!ui_) return {};
   const Ui::WispTiming& w = ui_->wisp_timing();
@@ -1156,7 +1221,8 @@ std::string App::wisp_timing_json() const {
          ",\"copy_rows\":" + avg(w.copy_rows, w.copies) + ",\"text_us\":" + avg(w.text_us, w.texts) +
          ",\"composes\":" + std::to_string(w.composes) + ",\"mouth_compose_us\":" + avg(w.mouth_compose_us, w.mouth_composes) +
          ",\"full_bands\":" + std::to_string(w.full_bands) +
-         ",\"row_bands\":" + std::to_string(w.row_bands) + "}";
+         ",\"row_bands\":" + std::to_string(w.row_bands) +
+         ",\"worker_compose_us\":" + avg(face_job_total_us_, face_jobs_) + ",\"show_ms\":" + std::to_string(face_render_ms_) + "}";
 }
 
 void App::reveal_bars() {
@@ -2640,7 +2706,9 @@ void App::tick() {
   const bool face_on = model_.wisp && !display_sleeping_;
   const bool replying = model_.screen == Screen::Responding && wisp_renderer_.state() == WispState::Speaking;
   const bool lane = face_on && replying && speaking();
-  if (lane && t - face_full_at_ < std::max(kFaceSpeakFullMs, face_cost_ms_ + face_cost_ms_ / 4)) {
+  if (profile_.face_async && wisp_renderer_.ready()) {
+    face_tick_async(t);
+  } else if (lane && t - face_full_at_ < std::max(kFaceSpeakFullMs, face_cost_ms_ + face_cost_ms_ / 4)) {
     // Speaking, between full frames: only the mouth's shape moves (the mouth lane), at its
     // place from the last full frame, aimed at the sound heard when it reaches the screen.
     if (t - face_at_ >= std::max(kFaceMouthMs, face_mouth_cost_ms_ + face_mouth_cost_ms_ / 4)) {
@@ -3228,6 +3296,7 @@ std::string App::console(std::string_view raw) {
     WispState s;
     if (rest == "timing reset") {
       if (ui_) ui_->reset_wisp_timing();
+      face_job_total_us_ = 0, face_jobs_ = 0;
       return "@ok face timing reset";
     }
     if (rest == "auto") face_forced_ = false;

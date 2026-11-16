@@ -9763,3 +9763,54 @@ TEST("wisp face: while she speaks, the mouth lane runs between full frames; the 
   CHECK(mouth >= 15);             // about 30 a second in all, the rest mouth-only
   CHECK(same_time_mouth_frames >= 15);
 }
+
+namespace {
+// A stand-in for the board's second core: the job waits until the test runs it.
+void (*g_face_job)(void*) = nullptr;
+void* g_face_arg = nullptr;
+int g_face_kicks = 0;
+void face_async_later(void (*job)(void*), void* arg) { g_face_job = job, g_face_arg = arg, ++g_face_kicks; }
+bool run_face_job() {
+  if (!g_face_job) return false;
+  auto job = g_face_job;
+  g_face_job = nullptr;
+  job(g_face_arg);
+  return true;
+}
+}  // namespace
+
+TEST("wisp face: composed on another core, the app waits its turn and shows each frame once done") {
+  const auto file = wisp_file();
+  hg::DeviceProfile p = wisp_profile(file);
+  p.face_async = &face_async_later;
+  g_face_job = nullptr, g_face_kicks = 0;
+  Rig r(p);
+  r.bring_online(true);
+  r.advance(200);
+  CHECK(r.app.model().wisp != nullptr);
+  CHECK(r.app.model().wisp_async);
+  CHECK(g_face_kicks >= 1);
+  // While the worker composes, the app neither kicks another frame nor touches the face.
+  CHECK(r.app.model().wisp_busy);
+  const int kicks = g_face_kicks;
+  const uint32_t frame = r.app.model().wisp->frame();
+  r.server(R"({"type":"ping","ts":1})");
+  r.advance(300);
+  CHECK_EQ(g_face_kicks, kicks);
+  CHECK_EQ(r.app.model().wisp->frame(), frame);
+  // Done: the next tick shows it and starts the next one.
+  CHECK(run_face_job());
+  r.advance(40);
+  CHECK(!g_face_job || r.app.model().wisp_busy);
+  CHECK(g_face_kicks > kicks);
+  // Running it promptly keeps the face near 30 frames a second.
+  const int k0 = g_face_kicks;
+  for (int i = 0; i < 100; ++i) {
+    run_face_job();
+    r.advance(10);
+  }
+  const int frames = g_face_kicks - k0;
+  CHECK(frames >= 22 && frames <= 35);
+  // The face command reports the worker's compose time.
+  CHECK(r.app.console("face").find("\"worker_compose_us\"") != std::string::npos);
+}

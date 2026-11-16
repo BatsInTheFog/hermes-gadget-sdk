@@ -7,6 +7,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -66,6 +67,9 @@ struct DeviceProfile {
   // While on, the port sends even small allocations to PSRAM (the face's metadata at start-up),
   // sparing internal RAM. Null: no such choice.
   void (*prefer_psram)(bool on) = nullptr;
+  // Runs job(arg) once on another core and returns at once (Wisp's face composes there while
+  // the app task keeps audio, touch and the connection going). Null: the face composes inline.
+  void (*face_async)(void (*job)(void*), void* arg) = nullptr;
   // The touchscreen's pixels per inch, so tap targets are about 7 mm tall; 0 assumes kDefaultTouchPpi.
   uint16_t touch_ppi = 0;
   static constexpr uint16_t kDefaultTouchPpi = 200;
@@ -934,6 +938,16 @@ private:
   static constexpr uint32_t kFaceMouthMs = 33;        // and the mouth lane 30 a second between
   uint32_t face_full_at_ = 0, face_mouth_cost_ms_ = 0;
   uint32_t face_full_frames_ = 0, face_mouth_frames_ = 0;  // counted for the `face` command
+  // The face worker (DeviceProfile::face_async): 0 idle, 1 composing, 2 composed, not yet shown.
+  // While it composes, nothing here touches the renderer or the face buffer.
+  std::atomic<int> face_job_{0};
+  FaceFrame face_job_frame_;
+  uint32_t face_job_us_ = 0;             // the last compose on the worker
+  uint64_t face_job_total_us_ = 0;
+  uint32_t face_jobs_ = 0;
+  uint32_t face_render_ms_ = 0;          // the last showing of a composed frame (copy and send)
+  static void face_job_entry(void* app);
+  void face_tick_async(uint32_t t);
   static constexpr float kFaceClockScale = 0.62f;  // the resting clock's face, in the top half
   uint32_t face_success_until_ = 0, face_sad_until_ = 0;
   std::string turn_outcome_;  // the last turn.end's outcome

@@ -652,6 +652,25 @@ extern "C" void app_main(void) {
           esp_partition_munmap(handle);
           ESP_LOGI(TAG, "Wisp face art copied to PSRAM");
         }
+        // Wisp's face composes on core 1 (the app task, Wi-Fi and audio keep core 0).
+        profile.face_async = [](void (*job)(void*), void* arg) {
+          static void (*s_job)(void*) = nullptr;
+          static void* s_arg = nullptr;
+          static TaskHandle_t s_task = nullptr;
+          s_job = job, s_arg = arg;
+          if (!s_task) {
+            xTaskCreatePinnedToCore(
+                [](void*) {
+                  for (;;) {
+                    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+                    if (s_job) s_job(s_arg);
+                  }
+                },
+                "hg-face", 4096, nullptr, 3, &s_task, 1);
+          }
+          if (s_task) xTaskNotifyGive(s_task);
+          else job(arg);  // no task: compose here
+        };
 #if CONFIG_SPIRAM_USE_MALLOC
         profile.prefer_psram = [](bool on) {
           heap_caps_malloc_extmem_enable(on ? 0 : CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL);

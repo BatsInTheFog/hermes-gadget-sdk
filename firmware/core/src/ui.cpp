@@ -524,6 +524,9 @@ void Ui::render(const UiModel& m) {
 }
 
 void Ui::draw_frame(const UiModel& m) {
+  // The face is being composed on another core: show nothing now (its buffer is in flux); the
+  // frame after it is done repaints whatever changed meanwhile.
+  if (m.wisp && m.wisp_busy) return;
   // A display that holds only a band of rows cannot resend rows it missed, so it
   // asks for the whole screen again rather than leave a stale band on the panel.
   if (display_.take_redraw_request()) valid_ = false;
@@ -1624,12 +1627,22 @@ int Ui::wisp_text_top() const {
   return info_.height - layout_.bottom_h - 2 * Canvas::line_height(s) - 2 * s;
 }
 
+FaceFrame Ui::wisp_target() {
+  const size_t px = static_cast<size_t>(info_.width) * info_.height;
+  if (wisp_fb_.size() != px) {
+    wisp_fb_.assign(px, 0);
+    wisp_from_ = nullptr;
+  }
+  return FaceFrame{wisp_fb_.data(), info_.width, info_.height, 0, 0};
+}
+
 void Ui::ensure_wisp(const UiModel& m) {
   const size_t px = static_cast<size_t>(info_.width) * info_.height;
   if (wisp_fb_.size() != px) {
     wisp_fb_.assign(px, 0);
     wisp_from_ = nullptr;
   }
+  if (m.wisp_async) return;  // composed by the app's worker; this only shows it
   if (wisp_from_ == m.wisp && wisp_frame_ == m.wisp_frame) return;  // composed once per face frame
   FaceFrame f{wisp_fb_.data(), info_.width, info_.height, 0, 0};
   const uint64_t t0 = clock_ ? clock_->now_us() : 0;
