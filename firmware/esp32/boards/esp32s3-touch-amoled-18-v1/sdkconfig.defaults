@@ -40,3 +40,11 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 # the last address (the base default) left this board without an address for minutes on
 # a Google mesh network that ignores a request for an address it didn't expect.
 # CONFIG_LWIP_DHCP_RESTORE_LAST_IP is not set
+
+# Tailnet (docs/hardware-validation.md#tailnet): Wisp joins Tailscale itself to reach Hermes
+# from any network.
+CONFIG_HG_TAILNET=y
+CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_LWIP_SO_RCVBUF=y
+# Internal RAM: the relay's always-open TLS buffers in PSRAM.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
