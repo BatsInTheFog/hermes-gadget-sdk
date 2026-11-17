@@ -374,6 +374,7 @@ struct BoardConfig {
   bool autohide_bars = false;
   bool chat_view = false;
   bool idle_ladder = false;  // DeviceProfile::idle_ladder
+  bool recorder = false;     // the voice recorder to the microSD card (port_recorder.hpp; Wisp)
 };
 
 // GPIO held high to power the panel's peripheral rail. Boards without one

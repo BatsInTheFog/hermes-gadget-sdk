@@ -313,6 +313,7 @@ void App::begin() {
       log(LogLevel::Info, "Wisp face loaded: " + std::to_string(wisp_face_.part_count()) + " parts");
     else
       log(LogLevel::Warn, "Wisp face not used (" + why + "); showing the mascot");
+    if (wisp_renderer_.ready()) recorder_art();
     wisp_face_.drop_metadata();  // the renderer has what it needs; free the parsed JSON
     if (profile_.prefer_psram) profile_.prefer_psram(false);
   }
@@ -1911,10 +1912,21 @@ void App::on_button(Button button, bool pressed, bool touch) {
   // wakes the screen or dismisses the alarm starts none, so a quick press-and-hold after it still
   // talks. The menu keeps TALK as its select key, and a question on screen keeps its answers.
   const bool talk_key = button == Button::Talk && pressed && !touch;
+  // A third press as quickly opens the voice recorder (the double press has already gone home).
   if (talk_key) {
-    const bool second = talk_key_armed_ && now() - talk_key_at_ <= kDoublePressMs;
-    talk_key_armed_ = false;
-    if (second && double_home_ && !alarm_ && !settings_open() && !prompt_showing()) {  // the alarm takes the press
+    const bool quick = now() - talk_key_at_ <= kDoublePressMs;
+    const bool second = talk_key_armed_ && quick, third = talk_key_third_ && quick;
+    talk_key_armed_ = talk_key_third_ = false;
+    if (third && !rec_open_ && !alarm_ && !settings_open() && !prompt_showing() && recorder_available()) {
+      wake_buttons_ |= bit;
+      open_recorder();
+      return;
+    }
+    if (second && !rec_open_) {
+      talk_key_third_ = true;
+      talk_key_at_ = now();
+    }
+    if (second && double_home_ && !rec_open_ && !alarm_ && !settings_open() && !prompt_showing()) {  // the alarm takes the press
       wake_buttons_ |= bit;  // its release does nothing
       go_home();
       return;
@@ -1932,6 +1944,20 @@ void App::on_button(Button button, bool pressed, bool touch) {
   }
   if (wake_buttons_ & bit) {
     if (!pressed) wake_buttons_ &= static_cast<uint8_t>(~bit);
+    return;
+  }
+  // The recorder: the keys only brighten a dimmed screen (no talking: the mic is busy), and a
+  // press on "Saved" goes back to the face. Pause and Stop are on the screen.
+  if (rec_open_) {
+    if (pressed) {
+      rec_touch_at_ = now();
+      if (rec_dimmed_) {
+        rec_dimmed_ = false;
+        apply_backlight();
+      } else if (rec_phase_ == RecPhase::Done) {
+        close_recorder();
+      }
+    }
     return;
   }
   // A press closes the low battery alert and then does what it always does.
@@ -2323,6 +2349,10 @@ void App::cancel_turn() {
 }
 
 void App::on_mic_samples(const int16_t* samples, size_t count) {
+  if (rec_open_) {  // the port keeps the audio; here it only drives the art's glow
+    if (rec_phase_ == RecPhase::Recording) rec_level_.feed(samples, count, profile_.mic_rate);
+    return;
+  }
   if (hardware_check_ == HardwareCheck::Microphone) {
     level_ = level_percent(rms(samples, count));
     update_model();
@@ -2689,6 +2719,7 @@ void App::tick() {
   clock_tick();
   settings_tick();
   camera_tick();
+  recorder_tick();
   phone_tick();
 
   if (phase_ == Phase::Boot && static_cast<int32_t>(t - boot_until_) >= 0) {
@@ -2990,6 +3021,11 @@ void App::update_model() {
   }
   if (settings_open()) {
     settings_model();
+    if (!display_sleeping_) render(m);
+    return;
+  }
+  if (rec_open_) {  // the recorder owns the whole panel
+    recorder_model(m);
     if (!display_sleeping_) render(m);
     return;
   }
@@ -3468,6 +3504,39 @@ std::string App::console(std::string_view raw) {
   if (cmd == "camera") {
     if (rest == "close") { close_camera(); return "@ok camera closed"; }
     return open_camera() ? "@ok camera" : "@error camera unavailable (no camera, or during a prompt, update or pairing)";
+  }
+  if (cmd == "rec") {
+    // The voice recorder: its state and the mic level (for tuning the gain), and driving it.
+    if (rest == "start") return open_recorder() ? "@ok recording" : "@error recorder unavailable (no card or art, or busy)";
+    if (rest == "pause" || rest == "resume") {
+      recorder_pause(rest == "pause");
+      return rec_open_ ? "@ok" : "@error not recording";
+    }
+    if (rest == "stop") {
+      if (!rec_open_) return "@error not recording";
+      recorder_stop();
+      return "@ok saving";
+    }
+    if (rest == "level reset") {
+      rec_level_.reset();
+      return "@ok";
+    }
+    if (!rest.empty()) return "@error usage: rec [start | pause | resume | stop | level reset]";
+    static const char* const kPhases[] = {"recording", "paused", "saving", "done"};
+    json::Value r = json::Value::object();
+    r.set("available", recorder_available()).set("open", rec_open_);
+    if (rec_open_) r.set("phase", kPhases[static_cast<int>(rec_phase_)]);
+    r.set("db", static_cast<double>(rec_level_.db())).set("block_db", static_cast<double>(rec_level_.block_db()));
+    r.set("peak_db", static_cast<double>(rec_level_.peak_db())).set("frame", rec_level_.frame());
+    if (hal_.recorder) {
+      const AudioRecorder::Status st = hal_.recorder->status();
+      static const char* const kStates[] = {"idle", "recording", "paused", "finishing", "saved", "failed"};
+      r.set("state", kStates[static_cast<int>(st.state)]).set("seconds", static_cast<double>(st.samples / kRecordRate));
+      r.set("dropped", static_cast<double>(st.dropped)).set("ring_peak_pct", static_cast<double>(st.ring_peak));
+      r.set("file", st.file);
+      if (!st.error.empty()) r.set("error", st.error);
+    }
+    return "@rec " + r.dump();
   }
   if (cmd == "perf") return perf_command(rest);
   if (cmd == "diag" && rest.empty()) return diag_report();

@@ -10122,3 +10122,266 @@ TEST("idle ladder: on USB power the longer timeouts apply") {
   CHECK_EQ(r.app.console("set doze_after_usb 0"), std::string("@ok doze_after_usb"));
   CHECK(r.app.console("set off_after 99999").rfind("@error", 0) == 0);
 }
+
+// ---------------------------------------------------------------------------
+// The voice recorder (app_recorder.cpp): a triple TALK press opens it; Pause on a tap, Stop on
+// a one-second hold; "Saved", then the face.
+
+namespace {
+
+struct FakeRecorder final : hg::AudioRecorder {
+  bool card = true;
+  int starts = 0;
+  std::string name = "?";
+  Status st;
+  bool ready() override { return card; }
+  bool start(std::string_view n, std::string& error) override {
+    if (!card) {
+      error = "no card";
+      return false;
+    }
+    name = std::string(n);
+    ++starts;
+    st = Status{};
+    st.state = State::Recording;
+    st.file = "/sdcard/recordings/" + (name.empty() ? std::string("wisp_unsynced_1.wav") : name);
+    return true;
+  }
+  void pause(bool on) override { st.state = on ? State::Paused : State::Recording; }
+  void stop() override { st.state = State::Finishing; }
+  Status status() override { return st; }
+  void acknowledge() override { st.state = State::Idle; }
+};
+
+// The face file with the recorder's five mic frames, as Wisp's tools/prep_recorder.py adds them.
+std::vector<uint8_t> recorder_file() {
+  using wisp_test::dot_part;
+  const std::string meta = R"({"manifest":{"screen":[368,448],
+    "layout":{"eyeL":[120,120],"eyeR":[200,120],"mouth":[160,150],"flame":[160,90]},
+    "eyes":[{"L":{"file":"e.png","ax":2,"ay":4},"R":{"file":"e.png","ax":2,"ay":4}}],
+    "mouthLadders":[{"name":"Closed","fwd":{"file":"m.png","ax":2,"ay":1}}],
+    "flame":{"file":"fl.png","ax":2,"ay":8},
+    "recorder":{"mic":[{"file":"r1.png"},{"file":"r2.png"},{"file":"r3.png"},{"file":"r4.png"},{"file":"r5.png"}],
+                "box":[100,80]}},
+    "spec":{"tuning":{"eyeLine":120}}})";
+  return wisp_test::make_file({dot_part("e", 4, 4, 2, 3, 0x07E0), dot_part("m", 4, 2, 2, 1, 0xF800),
+                               dot_part("fl", 4, 8, 2, 7, 0x001F), dot_part("r1", 20, 30, 5, 5, 0x0841),
+                               dot_part("r2", 20, 30, 5, 5, 0x1082), dot_part("r3", 20, 30, 5, 5, 0x2104),
+                               dot_part("r4", 20, 30, 5, 5, 0x4208), dot_part("r5", 20, 30, 5, 5, 0x8410)},
+                              meta);
+}
+
+struct RecRig {
+  std::vector<uint8_t> file = recorder_file();
+  FakeRecorder rec;
+  Rig r;
+  hg::TouchGestures touch{r.app};
+  explicit RecRig(bool with_art = true) : r(profile(with_art ? &file : nullptr), false) {
+    r.fake.make_panel(368, 448);
+    r.fake.backlight = true;
+    r.hal.recorder = &rec;
+    r.fake.wall_ok = true;
+    r.fake.wall.year = 2026, r.fake.wall.month = 11, r.fake.wall.day = 17;
+    r.fake.wall.hour = 14, r.fake.wall.minute = 3, r.fake.wall.second = 9;
+    r.bring_online(true);
+    r.advance(200);
+  }
+  static hg::DeviceProfile profile(const std::vector<uint8_t>* f) {
+    hg::DeviceProfile p = Rig::touch_profile();
+    if (f) p.face_asset = f->data(), p.face_asset_size = f->size();
+    return p;
+  }
+  void press_talk_three_times() {
+    for (int i = 0; i < 3; ++i) {
+      r.app.on_button(hg::Button::Talk, true);
+      r.advance(60);
+      r.app.on_button(hg::Button::Talk, false);
+      r.advance(60);
+    }
+  }
+  void tap(int x, int y, uint32_t hold_ms = 60) {
+    touch.update(true, x, y, r.fake.clock);
+    for (uint32_t t = 0; t < hold_ms; t += 10) {
+      r.advance(10);
+      touch.update(true, x, y, r.fake.clock);
+      touch.tick(r.fake.clock);
+    }
+    touch.update(false, 0, 0, r.fake.clock);
+    r.advance(10);
+  }
+  // The buttons' centres on the 368x448 panel.
+  static constexpr int kPauseX = 184 - 70, kStopX = 184 + 70, kButtonY = 448 - 34 - 7;
+};
+
+}  // namespace
+
+TEST("recorder: a triple TALK press opens it and records at once, named for its start") {
+  RecRig x;
+  CHECK(x.r.app.recorder_available());
+  x.press_talk_three_times();
+  CHECK(x.r.app.screen() == hg::Screen::Recorder);
+  CHECK(x.r.app.recorder_open());
+  CHECK_EQ(x.rec.starts, 1);
+  CHECK_EQ(x.rec.name, std::string("wisp_20261117_140309.wav"));
+  CHECK(x.r.fake.mic_on);
+  CHECK(x.r.app.model().rec.mic[0] != nullptr);
+  CHECK_EQ(x.r.app.model().rec.mic_x, 100);
+  // TALK doesn't talk here: the mic is busy.
+  const size_t starts = sent_count(x.r, "audio.start");
+  x.r.advance(1000);
+  x.r.app.on_button(hg::Button::Talk, true);
+  x.r.advance(800);
+  x.r.app.on_button(hg::Button::Talk, false);
+  CHECK_EQ(sent_count(x.r, "audio.start"), starts);
+  CHECK(x.r.app.screen() == hg::Screen::Recorder);
+  // A hold on the screen doesn't talk either.
+  x.tap(184, 200, 800);
+  CHECK_EQ(sent_count(x.r, "audio.start"), starts);
+  CHECK(x.r.app.screen() == hg::Screen::Recorder);
+}
+
+TEST("recorder: two presses still only go home; slow presses never open it") {
+  RecRig x;
+  x.r.app.on_button(hg::Button::Talk, true);
+  x.r.advance(60);
+  x.r.app.on_button(hg::Button::Talk, false);
+  x.r.advance(60);
+  x.r.app.on_button(hg::Button::Talk, true);
+  x.r.advance(60);
+  x.r.app.on_button(hg::Button::Talk, false);
+  CHECK(x.r.app.screen() == hg::Screen::Ready);
+  CHECK(!x.r.app.recorder_open());
+  x.r.advance(600);  // the third comes too late
+  x.r.app.on_button(hg::Button::Talk, true);
+  CHECK(!x.r.app.recorder_open());
+  CHECK(x.r.app.screen() == hg::Screen::Listening);
+  x.r.app.on_button(hg::Button::Talk, false);
+  CHECK_EQ(x.rec.starts, 0);
+}
+
+TEST("recorder: the timer, Pause on a tap, Stop on a one-second hold, Saved, then the face") {
+  RecRig x;
+  x.press_talk_three_times();
+  x.rec.st.samples = 16000 * 65;  // 1:05 recorded
+  x.r.advance(50);
+  CHECK_EQ(x.r.app.model().rec.time, std::string("01:05"));
+  CHECK(x.r.app.model().rec.phase == hg::RecorderView::Phase::Recording);
+  x.tap(RecRig::kPauseX, RecRig::kButtonY);
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Paused);
+  CHECK(x.r.app.model().rec.phase == hg::RecorderView::Phase::Paused);
+  // Paused: the timer blinks.
+  int on = 0, off = 0;
+  for (int i = 0; i < 12; ++i) {
+    x.r.advance(100);
+    if (x.r.app.model().rec.time_on) ++on;
+    else ++off;
+  }
+  CHECK(on > 0 && off > 0);
+  x.tap(RecRig::kPauseX, RecRig::kButtonY);  // resume: the same file goes on
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Recording);
+  CHECK_EQ(x.rec.starts, 1);
+  // Stop: half a second fills half the ring and stops nothing.
+  x.touch.update(true, RecRig::kStopX, RecRig::kButtonY, x.r.fake.clock);
+  x.r.advance(500);
+  CHECK(x.r.app.model().rec.stop_permille >= 450 && x.r.app.model().rec.stop_permille <= 550);
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Recording);
+  x.r.advance(520);
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Finishing);
+  CHECK(!x.r.fake.mic_on);
+  CHECK(x.r.app.model().rec.phase == hg::RecorderView::Phase::Message);
+  x.touch.update(false, 0, 0, x.r.fake.clock);
+  x.rec.st.state = hg::AudioRecorder::State::Saved;
+  x.r.advance(20);
+  CHECK_EQ(x.r.app.model().rec.message, std::string("Saved"));
+  CHECK_EQ(x.r.app.model().rec.detail, std::string("wisp_20261117_140309.wav"));
+  x.r.advance(hg::App::kRecSavedMs + 50);
+  CHECK(!x.r.app.recorder_open());
+  CHECK(x.r.app.screen() == hg::Screen::Ready);
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Idle);
+}
+
+TEST("recorder: letting go of Stop early, or sliding off it, keeps recording") {
+  RecRig x;
+  x.press_talk_three_times();
+  x.tap(RecRig::kStopX, RecRig::kButtonY, 700);
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Recording);
+  CHECK_EQ(x.r.app.model().rec.stop_permille, 0);
+  x.touch.update(true, RecRig::kStopX, RecRig::kButtonY, x.r.fake.clock);
+  x.r.advance(400);
+  x.touch.update(true, RecRig::kStopX, RecRig::kButtonY - 120, x.r.fake.clock);  // up off the button
+  x.r.advance(1000);
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Recording);
+  x.touch.update(false, 0, 0, x.r.fake.clock);
+  x.r.advance(20);
+  CHECK(x.r.app.recorder_open());
+}
+
+TEST("recorder: never sleeps; dims after 30 s, and the touch that brightens does only that") {
+  RecRig x;
+  x.press_talk_three_times();
+  const int lit = x.r.fake.brightness;
+  CHECK(lit > 10);
+  x.r.advance(hg::App::kRecDimMs + 100);
+  CHECK(x.r.fake.brightness <= 10);
+  CHECK(x.r.app.screen() == hg::Screen::Recorder);
+  x.tap(RecRig::kPauseX, RecRig::kButtonY);  // brightens, doesn't pause
+  CHECK_EQ(x.r.fake.brightness, lit);
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Recording);
+  x.r.advance(10 * 60 * 1000);  // ten minutes: still recording, not dozing
+  CHECK(x.r.app.recorder_open());
+  CHECK(!x.r.fake.dozing);
+  CHECK(x.r.fake.mic_on);
+}
+
+TEST("recorder: an unset clock leaves the name to the port; no card or no art: it doesn't open") {
+  {
+    RecRig x;
+    x.r.fake.wall_ok = false;
+    x.press_talk_three_times();
+    CHECK(x.r.app.recorder_open());
+    CHECK_EQ(x.rec.name, std::string());
+  }
+  {
+    RecRig x;
+    x.r.fake.wall.year = 1970;
+    x.press_talk_three_times();
+    CHECK_EQ(x.rec.name, std::string());
+  }
+  {
+    RecRig x;
+    x.rec.card = false;
+    x.press_talk_three_times();
+    CHECK(!x.r.app.recorder_open());
+    CHECK(!x.r.fake.mic_on);
+  }
+  {
+    RecRig x(false);
+    CHECK(!x.r.app.recorder_available());
+    x.press_talk_three_times();
+    CHECK(!x.r.app.recorder_open());
+  }
+}
+
+TEST("recorder: a failed card shows Not saved and goes back to the face") {
+  RecRig x;
+  x.press_talk_three_times();
+  x.rec.st.state = hg::AudioRecorder::State::Failed;
+  x.rec.st.error = "card write failed";
+  x.r.advance(20);
+  CHECK(x.r.app.model().rec.phase == hg::RecorderView::Phase::Message);
+  CHECK(!x.r.app.model().rec.good);
+  CHECK(!x.r.fake.mic_on);
+  x.r.advance(5100);
+  CHECK(!x.r.app.recorder_open());
+}
+
+TEST("recorder: the rec console command reports and drives it") {
+  RecRig x;
+  CHECK(x.r.app.console("rec").find("\"available\":true") != std::string::npos);
+  CHECK_EQ(x.r.app.console("rec start"), std::string("@ok recording"));
+  CHECK(x.r.app.screen() == hg::Screen::Recorder);
+  CHECK_EQ(x.r.app.console("rec pause"), std::string("@ok"));
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Paused);
+  CHECK_EQ(x.r.app.console("rec stop"), std::string("@ok saving"));
+  CHECK(x.r.app.console("rec").find("\"phase\":\"saving\"") != std::string::npos);
+}

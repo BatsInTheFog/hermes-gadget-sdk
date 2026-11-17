@@ -164,6 +164,7 @@ EdgeRing edge_ring(const UiModel& m) {
     case Screen::LowBattery:
     case Screen::Charging:
     case Screen::Charged:
+    case Screen::Recorder:
       return r;
     case Screen::Clock:
       r.kind = EdgeRing::Kind::Ticks;
@@ -332,6 +333,7 @@ const char* screen_name(Screen s) {
     case Screen::LowBattery: return "low_battery";
     case Screen::Charging: return "charging";
     case Screen::Charged: return "charged";
+    case Screen::Recorder: return "recorder";
   }
   return "unknown";
 }
@@ -607,6 +609,11 @@ void Ui::draw_frame(const UiModel& m) {
     draw_battery_face(m);
     return;
   }
+  if (m.screen == Screen::Recorder) {
+    draw_recorder(m);
+    return;
+  }
+  if (!rec_px_.empty()) std::vector<uint16_t>().swap(rec_px_);  // the recorder closed: its art buffer goes
   if (full_face_ != FullFace::None) {  // a face painted the whole panel: everything comes back
     full_face_ = FullFace::None;
     valid_ = false;
@@ -962,6 +969,7 @@ void Ui::draw_indicator(Canvas& c, const UiModel& m, int cx, int cy, int r) {
     case Screen::LowBattery:
     case Screen::Charging:
     case Screen::Charged:
+    case Screen::Recorder:
       break;
   }
 }
@@ -2410,6 +2418,150 @@ void Ui::draw_clock(const UiModel& m) {
     if (Canvas::text_width(m.clock_date, ds) <= avail(date_y, date_y + Canvas::line_height(ds)))
       panel.text(cx + dx - Canvas::text_width(m.clock_date, ds) / 2, date_y + dy, m.clock_date, ds, kDim);
   });
+}
+
+// ---------------------------------------------------------------------------
+// The voice recorder (Screen::Recorder): the whole panel, in three bands that each redraw only
+// when what they show changed: the REC dot and timer, the mic art, and the two buttons.
+
+namespace {
+
+constexpr int kRecTopH = 64;     // the REC row: panel rows [0, kRecTopH)
+constexpr int kRecButtonR = 34;  // the buttons' radius
+constexpr int kRecButtonHitR = 46;
+constexpr uint16_t kRecRing = rgb565(90, 98, 110);
+
+// A ring from 12 o'clock clockwise over `permille` thousandths of a turn.
+void progress_ring(Canvas& c, int cx, int cy, int r, int thickness, int permille, uint16_t color) {
+  if (permille <= 0) return;
+  const int r_in = r - thickness;
+  const double limit = std::min(permille, 1000) * (2 * 3.14159265358979 / 1000.0);
+  for (int dy = -r; dy <= r; ++dy) {
+    for (int dx = -r; dx <= r; ++dx) {
+      const int d2 = dx * dx + dy * dy;
+      if (d2 > r * r || d2 < r_in * r_in) continue;
+      double a = std::atan2(static_cast<double>(dx), static_cast<double>(-dy));  // clockwise from 12
+      if (a < 0) a += 2 * 3.14159265358979;
+      if (a <= limit) c.pixel(cx + dx, cy + dy, color);
+    }
+  }
+}
+
+// A right-pointing triangle (Resume), centred on (cx, cy), `h` rows tall.
+void play_icon(Canvas& c, int cx, int cy, int h, uint16_t color) {
+  const int w = h * 7 / 8, x0 = cx - w / 3, y0 = cy - h / 2, half = h / 2;
+  for (int y = 0; y < h; ++y) {
+    const int from_mid = y < half ? y : h - 1 - y;
+    c.fill_rect(x0, y0 + y, std::max(1, from_mid * w / half), 1, color);
+  }
+}
+
+// The mic band's last row (exclusive) and the buttons' centre row.
+int rec_mic_bottom(int panel_h) { return panel_h - 2 * kRecButtonR - 14; }
+int rec_button_y(int panel_h) { return panel_h - kRecButtonR - 7; }
+
+}  // namespace
+
+int Ui::recorder_button_hit(int x, int y, int slack) const {
+  const int cy = rec_button_y(panel_.height), r = kRecButtonHitR + slack;
+  const int px = panel_.width / 2 - 70, sx = panel_.width / 2 + 70;
+  auto in = [&](int cx) { return (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r; };
+  return in(px) ? 1 : in(sx) ? 2 : 0;
+}
+
+void Ui::draw_recorder_band(Canvas& c, const UiModel& m, int band) {
+  const RecorderView& r = m.rec;
+  const int W = panel_.width, H = panel_.height;
+  const bool paused = r.phase == RecorderView::Phase::Paused;
+  if (band == 0) {  // the REC dot, the label and the timer, centred
+    c.fill_rect(0, 0, W, kRecTopH, 0);
+    const int s = 3, dot = 10, gap = 12;
+    const std::string label = paused ? "PAUSED" : "REC";
+    const int lw = Canvas::text_width(label, s), tw = Canvas::text_width(r.time, s);
+    const int total = 2 * dot + gap + lw + 2 * gap + tw;
+    const int x0 = (W - total) / 2, cy = kRecTopH / 2 + 6, ty = cy - Canvas::line_height(s) / 2;
+    const uint16_t ink = paused ? kAccent : kRed;
+    c.fill_circle(x0 + dot, cy, dot, ink);
+    c.text(x0 + 2 * dot + gap, ty, label, s, paused ? kAccent : kText);
+    if (r.time_on) c.text(x0 + 2 * dot + gap + lw + 2 * gap, ty, r.time, s, kText);
+  } else if (band == 1) {  // the mic art
+    const WispFace::Part* part = r.mic[(paused ? 1 : std::clamp<int>(r.frame, 1, 5)) - 1];
+    const int y0 = kRecTopH, y1 = rec_mic_bottom(H);
+    c.fill_rect(0, y0, W, y1 - y0, 0);
+    if (!part) return;
+    const size_t need = static_cast<size_t>(part->w) * part->h;
+    if (rec_px_.size() != need) rec_px_.assign(need, 0);
+    else std::fill(rec_px_.begin(), rec_px_.end(), uint16_t(0));
+    FaceFrame f{rec_px_.data(), part->w, part->h, 0, 0};
+    add_part(f, *part, 0, 0, 1, 1, paused ? 102 : 256);  // paused: about 40%
+    c.blit(r.mic_x, r.mic_y, part->w, part->h, rec_px_.data());
+  } else {  // Pause (or Resume) and Stop with its hold ring
+    const int y0 = rec_mic_bottom(H), cy = rec_button_y(H);
+    const int px = W / 2 - 70, sx = W / 2 + 70;
+    c.fill_rect(0, y0, W, H - y0, 0);
+    c.ring(px, cy, kRecButtonR, 3, kRecRing);
+    if (paused) {
+      play_icon(c, px, cy, 28, kText);
+    } else {
+      c.fill_rect(px - 11, cy - 13, 8, 26, kText);
+      c.fill_rect(px + 3, cy - 13, 8, 26, kText);
+    }
+    c.ring(sx, cy, kRecButtonR, 3, kRecRing);
+    progress_ring(c, sx, cy, kRecButtonR + 1, 6, r.stop_permille, kRed);
+    c.fill_rect(sx - 12, cy - 12, 24, 24, kRed);
+  }
+}
+
+void Ui::draw_recorder(const UiModel& m) {
+  const RecorderView& r = m.rec;
+  const bool fresh = !valid_ || full_face_ != FullFace::Recorder;
+  full_face_ = FullFace::Recorder;
+  valid_ = true;  // leaving it repaints everything anyway (draw_frame)
+  const int W = panel_.width, H = panel_.height;
+  if (r.phase == RecorderView::Phase::Message) {
+    const uint32_t key = Hash().val(1).add(r.message).add(r.detail).val(r.good).get();
+    if (!fresh && rec_hash_[3] == key) return;
+    rec_hash_[0] = rec_hash_[1] = rec_hash_[2] = 0;
+    rec_hash_[3] = key;
+    each_window(0, H, [&](int, int) {
+      Canvas c = panel_canvas();
+      c.fill_rect(0, 0, W, H, 0);
+      const int s = 4, ds = 2;
+      const int y = H / 2 - Canvas::line_height(s);
+      c.text((W - Canvas::text_width(r.message, s)) / 2, y, r.message, s, r.good ? kGreen : kRed);
+      int dy = y + Canvas::line_height(s) + 12;
+      for (const auto& line : wrap_text(r.detail, std::max(8, (W - 48) / Canvas::text_width("M", ds)))) {
+        c.text((W - Canvas::text_width(line, ds)) / 2, dy, line, ds, kDim);
+        dy += Canvas::line_height(ds) + 4;
+      }
+    });
+    return;
+  }
+  const bool paused = r.phase == RecorderView::Phase::Paused;
+  const uint32_t keys[3] = {
+      Hash().val(2).val(paused).add(r.time).val(r.time_on).get(),
+      Hash().val(3).val(paused ? 0 : r.frame).val(paused).val(r.mic_x).val(r.mic_y).get(),
+      Hash().val(4).val(paused).val(r.stop_permille).get(),
+  };
+  const int bands[4] = {0, kRecTopH, rec_mic_bottom(H), H};
+  if (fresh || rec_hash_[3]) {  // from another screen or a message: all of it
+    rec_hash_[3] = 0;
+    each_window(0, H, [&](int, int) {
+      Canvas c = panel_canvas();
+      for (int b = 0; b < 3; ++b) draw_recorder_band(c, m, b);
+    });
+    for (int b = 0; b < 3; ++b) rec_hash_[b] = keys[b];
+    return;
+  }
+  for (int b = 0; b < 3; ++b) {
+    if (rec_hash_[b] == keys[b]) continue;
+    rec_hash_[b] = keys[b];
+    each_window(bands[b], bands[b + 1], [&](int, int) {
+      Canvas c = panel_canvas();
+      c.set_clip_rows(bands[b], bands[b + 1]);
+      draw_recorder_band(c, m, b);
+    });
+  }
 }
 
 }  // namespace hg

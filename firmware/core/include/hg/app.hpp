@@ -24,6 +24,7 @@
 #include "hg/recording.hpp"
 #include "hg/tones.hpp"
 #include "hg/ui.hpp"
+#include "hg/recorder.hpp"
 #include "hg/vad.hpp"
 #include "hg/wisp_face.hpp"
 
@@ -215,6 +216,25 @@ class App {
   // to TALK).
   bool camera_tap_live() const { return camera_open_; }
   void camera_tap();
+  // The voice recorder (app_recorder.cpp; boards whose port sets hal.recorder, with the mic
+  // art in the face file). A triple press of TALK opens it and records at once; the screen
+  // shows the timer, the mic art glowing with the level, Pause (a tap) and Stop (held for a
+  // second). Talking to Hermes is off while it is open: the mic is busy. Stopping saves the
+  // file and goes back to the face.
+  bool recorder_available() const;
+  bool open_recorder();
+  bool recorder_open() const { return rec_open_; }
+  void recorder_pause(bool on);
+  void recorder_stop();
+  // Touch: on the recorder screen every touch goes here (TouchGestures State::Recorder).
+  bool recorder_touch_live() const { return rec_open_; }
+  void recorder_press(int x, int y);
+  void recorder_move(int x, int y);
+  void recorder_lift();
+  static constexpr uint32_t kRecStopHoldMs = 1000;  // Stop is a one-second hold
+  static constexpr uint32_t kRecDimMs = 30000;      // untouched this long, the screen dims
+  static constexpr uint32_t kRecSavedMs = 2000;     // "Saved" shows this long
+  static constexpr uint8_t kRecLowBattery = 5;      // at or under this (on battery): stop and save
   // Hermes profiles: which one answers this device. Switching asks the server; the
   // device keeps a profile only once Hermes confirms it, and asks again only after an answer.
   bool next_agent_profile();
@@ -676,6 +696,7 @@ class App {
   uint32_t talk_down_at_ = 0;
   uint32_t talk_key_at_ = 0;      // the last press of the TALK key, for a double press
   bool talk_key_armed_ = false;   // ...and whether the next press may complete one
+  bool talk_key_third_ = false;   // a double press just happened: a third press opens the recorder
   std::optional<PowerStatus> power_status_;
   uint32_t power_read_at_ = 0, activity_at_ = 0, power_key_polled_at_ = 0;
   uint32_t screen_timeout_ms_ = 0;
@@ -948,6 +969,27 @@ class App {
   // Wisp's face, from DeviceProfile::face_asset; the renderer is ready only when the file loaded.
   WispFace wisp_face_;
   WispFaceRenderer wisp_renderer_;
+  // The voice recorder (app_recorder.cpp).
+  enum class RecPhase : uint8_t { Recording, Paused, Saving, Done };
+  void recorder_art();  // finds the mic art in the face file (before its metadata is dropped)
+  void recorder_tick();
+  void recorder_model(UiModel& m);
+  void close_recorder();
+  void recorder_message(std::string message, std::string detail, bool good, uint32_t for_ms);
+  const WispFace::Part* rec_mic_[5] = {};
+  int rec_mic_x_ = 0, rec_mic_y_ = 0;
+  bool rec_open_ = false;
+  RecPhase rec_phase_ = RecPhase::Recording;
+  RecLevel rec_level_;
+  uint32_t rec_touch_at_ = 0;     // the last touch or press: the dim counts from it
+  bool rec_dimmed_ = false;
+  bool rec_swallow_ = false;      // this touch only brightened the screen
+  int rec_pressed_ = 0;           // the button the finger came down on (1 Pause, 2 Stop)
+  uint32_t rec_stop_at_ = 0;      // when the Stop hold began
+  uint32_t rec_done_until_ = 0;   // Done: when the message gives way to the face
+  uint32_t rec_sig_ = 0;          // what the screen showed at the last model (redraw on change)
+  std::string rec_message_, rec_detail_;
+  bool rec_good_ = true;
   bool face_forced_ = false;  // the `face` console command chose the state
   WispState face_force_ = WispState::Idle;
   uint32_t face_at_ = 0;  // the face's last animation step

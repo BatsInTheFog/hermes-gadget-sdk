@@ -55,7 +55,7 @@ void App::apply_backlight() {
   if (!hal_.display || !hal_.display->info().has_backlight) return;
   int level = brightness_;
   if (clock_showing_) level = std::min(level, std::max(5, brightness_ * kClockPercent / 100));
-  if (display_dimmed_) level = std::min(level, 10);
+  if (display_dimmed_ || (rec_open_ && rec_dimmed_)) level = std::min(level, 10);
   if (display_sleeping_ || face_down_) level = 0;
   hal_.display->set_backlight(static_cast<uint8_t>(level));
 }
@@ -147,6 +147,11 @@ void App::set_dozing(bool dozing) {
 
 void App::on_power_key() {
   if (!hal_.display || !hal_.display->info().has_backlight) return;
+  if (rec_open_) {  // recording: the press only brightens a dimmed screen
+    rec_touch_at_ = now();
+    if (rec_dimmed_) rec_dimmed_ = false, apply_backlight();
+    return;
+  }
   // Turning the screen off is an answer to what was on it, before anything closes: a reply
   // under a notice or a card the press closes stays unread. A press that only wakes reads nothing.
   if (!display_sleeping_ && !display_dimmed_) mark_reply_read();
@@ -187,7 +192,7 @@ bool App::menu_open() const { return overlay_ == Overlay::Profiles || overlay_ =
 // so the screen timeout and the resting clock can both ask.
 bool App::screen_busy() const {
   return mode_ != Mode::Idle || speaking() || talk_held_ || cancel_held_ || prompt_showing() ||
-         !wifi_setup_text_.empty() || phone_pairing_ || camera_open_ || ota_busy() || ota_ == Ota::Restarting ||
+         !wifi_setup_text_.empty() || phone_pairing_ || camera_open_ || rec_open_ || ota_busy() || ota_ == Ota::Restarting ||
          (overlay_ != Overlay::None && !menu_open()) || battery_alert_;
 }
 

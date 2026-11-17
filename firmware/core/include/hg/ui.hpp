@@ -46,6 +46,7 @@ enum class Screen : uint8_t {
   LowBattery, // the low battery alert: a red battery icon, `headline` (the percentage) large, `detail` below
   Charging,   // plugged in: the same face in green with a bolt; no bar and no headline without a level
   Charged,    // a full battery: the same face in green, full
+  Recorder,   // the voice recorder (Wisp): the whole panel (UiModel::rec)
 };
 
 enum class Link : uint8_t { Offline, Network, Connecting, Online };
@@ -76,6 +77,22 @@ struct SettingRow {
 // The letter a profile without a face shows in the grid: the name's first character, in capitals
 // (ASCII and Latin-1), whatever case the name arrives in; "?" for an empty name.
 std::string profile_initial(std::string_view name);
+
+// Screen::Recorder: what the voice recorder shows (App::recorder_model). The REC dot and the
+// timer at the top, the mic art in the middle (frame 1..5 by level; frame 1 dimmed while
+// paused), Pause and hold-to-Stop at the bottom; or one message over the whole panel.
+struct RecorderView {
+  enum class Phase : uint8_t { Recording, Paused, Message };
+  Phase phase = Phase::Recording;
+  const WispFace::Part* mic[5] = {};  // borrowed from the face file
+  int mic_x = 0, mic_y = 0;           // the art's top-left corner on the panel
+  uint8_t frame = 1;
+  std::string time;                   // "mm:ss" or "h:mm:ss"
+  bool time_on = true;                // Paused: false in the blink's dark half
+  int16_t stop_permille = 0;          // how far the Stop hold has filled its ring
+  std::string message, detail;        // Phase::Message
+  bool good = true;                   // the message in green (saved) or red (failed)
+};
 
 struct UiModel {
   Screen screen = Screen::Boot;
@@ -153,6 +170,7 @@ struct UiModel {
   std::string clock_time, clock_date;
   uint8_t clock_minute = 0;
   uint8_t clock_second = 0;
+  RecorderView rec;  // Screen::Recorder
 };
 
 struct UiLayout {
@@ -268,6 +286,9 @@ class Ui {
   // The side of the largest profile icon this panel draws (a page of up to four, at the touch size
   // set): the size Hermes sends thumbnails at, at most `cap`. 0 without a grid.
   int profile_thumb_px(int cap) const;
+  // The recorder's touch buttons, panel coordinates: 1 Pause/Resume, 2 Stop, 0 neither.
+  // `slack` widens them (a finger already holding Stop may drift a little).
+  int recorder_button_hit(int x, int y, int slack = 0) const;
   bool title_hit(int x, int y) const {
     const int left = ox_ + (info_.width - layout_.title_w) / 2;
     return x >= left && x < left + layout_.title_w && y >= oy_ && y < oy_ + layout_.top_h;
@@ -349,6 +370,12 @@ class Ui {
   void draw_alarm(const UiModel& m);
   void draw_clock(const UiModel& m);
   void draw_battery_face(const UiModel& m);  // LowBattery, Charging, Charged
+  void draw_recorder(const UiModel& m);
+  void draw_recorder_band(Canvas& c, const UiModel& m, int band);
+  // The recorder's mic art, composed here (native RGB565) and copied to the framebuffer;
+  // freed when the recorder closes. The hashes of what each band last drew.
+  std::vector<uint16_t> rec_px_;
+  uint32_t rec_hash_[4] = {0, 0, 0, 0};
   Display& display_;
   DisplayInfo panel_;
   DisplayInfo info_;
@@ -415,7 +442,7 @@ class Ui {
   // The screen that owns the whole panel right now, and the hash of what it drew.
   // Leaving it repaints everything (draw_frame); each face repaints when the flag
   // is not itself, so Clock -> Alarm -> Clock in one minute still redraws.
-  enum class FullFace : uint8_t { None, Alarm, Clock, Battery };
+  enum class FullFace : uint8_t { None, Alarm, Clock, Battery, Recorder };
   FullFace full_face_ = FullFace::None;
   uint32_t face_hash_ = 0;
 };

@@ -4,6 +4,7 @@
 #include "port_cardputer.hpp"
 #include "port_sdlog.hpp"
 #include "port_sd.hpp"
+#include "port_recorder.hpp"
 
 #include <cstring>
 #include <utility>
@@ -76,6 +77,7 @@ hgp::Stc8Power g_stc8_power;
 hgp::I2sSpeaker g_speaker;
 hgp::CodecAudio g_codec;
 hgp::CodecMic g_codec_mic;
+hgp::SdRecorder g_recorder;
 hgp::CodecSpeaker g_codec_speaker;
 hgp::OpusSpeakerDecoder g_opus;
 hgp::TouchInput g_touch;
@@ -524,6 +526,11 @@ extern "C" void app_main(void) {
     if (board.light_sleep && g_codec.mic_link().switchable) g_codec_speaker.allow_power_down(g_codec.mic_link().format);
   }
   if (hal.speaker) hal.speaker_decoder = &g_opus;  // Opus replies when Hermes offers them
+  // The voice recorder: the codec's mic task feeds it directly (port_recorder.hpp).
+  if (board.recorder && board.sd.enabled && hal.mic == &g_codec_mic && g_recorder.begin()) {
+    hal.recorder = &g_recorder;
+    hgp::g_recorder_tap = &g_recorder;
+  }
   const bool imu = peripherals_ready && board.imu.enabled && g_motion.begin(board.imu, i2c_bus);
   g_time.begin(board.rtc, i2c_bus, g_storage);
   const bool touch = peripherals_ready && (board.touch.enabled || board.pwr_key.enabled || board.encoder.a >= 0) &&
@@ -756,7 +763,8 @@ extern "C" void app_main(void) {
 #if !CONFIG_HG_BOARD_ESP32_CYD
   g_touch.set_wakes(app.touch_wake());
 #endif
-  g_time.set_wanted(app.clock_enabled());  // SNTP only while the clock face is on
+  // SNTP while the clock face is on, and always with the recorder: its file names are local times.
+  g_time.set_wanted(app.clock_enabled() || hal.recorder != nullptr);
   hgp::console::begin();
 
 #if !CONFIG_HG_BOARD_ESP32_CYD

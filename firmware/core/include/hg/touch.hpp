@@ -22,6 +22,7 @@
 //                      a stop (a touch stops it); a swipe down that starts in the top strip (the
 //                      bar and the title) closes the view; a hold does not talk here
 //   any swipe          with autohide_bars, shows the top and hint bars for a while
+//   on the recorder    every touch goes to it: a tap on Pause, a one-second hold on Stop
 //
 // With the touch_talk setting off, holds and taps press TALK only where it doesn't
 // record (settings, a question, a ringing alarm); elsewhere they do nothing, and the
@@ -61,7 +62,7 @@ class TouchGestures {
 
  private:
   enum class State : uint8_t { Idle, Pending, Settings, Picker, PickerDrag, Side, List, ListDrag, Camera, Talk, Swipe, Up, Down,
-                               ChatPending, ChatEdge, ChatDrag, ChatClose, Ignored };
+                               ChatPending, ChatEdge, ChatDrag, ChatClose, Recorder, Ignored };
   void press(Button b);
   void release(Button b);
 

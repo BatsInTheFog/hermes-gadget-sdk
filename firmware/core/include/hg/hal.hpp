@@ -206,6 +206,8 @@ class Power {
   virtual std::optional<bool> external_power() { return std::nullopt; }
 };
 
+class AudioRecorder;  // hg/recorder.hpp
+
 // Everything except `system` and `transport` may be null when the board lacks it.
 struct Hal {
   System* system = nullptr;
@@ -218,6 +220,7 @@ struct Hal {
   Updater* updater = nullptr;
   Power* power = nullptr;
   Camera* camera = nullptr;  // optional; only camera-capable boards set it
+  AudioRecorder* recorder = nullptr;  // optional: the voice recorder's card and writer (Wisp)
 };
 
 }  // namespace hg

@@ -48,6 +48,7 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
       case State::List: app_.settings_tap(x0_, y0_); break;
       case State::ListDrag: app_.settings_lift(); break;
       case State::Camera: app_.camera_tap(); break;
+      case State::Recorder: app_.recorder_lift(); break;
       case State::Side:  // a sideways swipe: travel enough, and more sideways than down or up
         if (std::abs(dx_) >= cfg_.swipe_px && std::abs(dx_) > 2 * std::abs(dy_)) {
           if (in_picker_) {
@@ -94,6 +95,11 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
     // tap lands on nothing and its hold talks to the Ready screen it brought back.
     from_clock_ = app_.clock_showing();
     if (app_.touch_ignored()) { state_ = State::Ignored; return; }  // touch_wake off: a key wakes it
+    if (app_.recorder_touch_live()) {  // the recorder owns every touch (and never sleeps)
+      state_ = State::Recorder;
+      app_.recorder_press(x, y);
+      return;
+    }
     if (app_.wake_display()) { state_ = State::Ignored; return; }
     app_.mark_reply_read();  // what was on screen, before a notice over the reply closes
     app_.close_notices_for_input();  // a low battery alert goes, and the touch acts on what is under it
@@ -142,6 +148,7 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
       }
       break;
     case State::ListDrag: app_.settings_drag(x, y); break;
+    case State::Recorder: app_.recorder_move(x, y); break;
     case State::Camera:  // tap to act; a swipe down leaves (or cancels the countdown)
       if (swiped_down) {
         state_ = State::Swipe;

@@ -20,6 +20,8 @@ namespace hgp::sd {
 void configure(const SdConfig& sd);
 // Mounts the card if it isn't yet: the card, or null (`err` says why). Thread-safe.
 sdmmc_card_t* mount(esp_err_t* err = nullptr);
+// Free space on the mounted card in MB (0 when not mounted).
+uint32_t free_mb();
 // After a failed write: the card was pulled or failed; the next mount() tries again.
 void unmount();
 constexpr const char* kMountPoint = "/sdcard";

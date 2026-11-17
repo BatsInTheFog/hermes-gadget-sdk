@@ -386,6 +386,7 @@ BoardConfig make() {
   b.chat_view = true;      // swipe left: the conversation so far
   b.idle_ladder = true;    // awake, resting, dozing, screen off (Wisp)
   b.tailnet = true;        // Wisp reaches Hermes over Tailscale from anywhere (docs/tailnet.md)
+  b.recorder = true;       // a triple TALK press records to the microSD card (port_recorder.hpp)
   // QMI8658 at 0x6B: a pick-up or shake wakes her. Axes not yet checked against the glass, so
   // face_down_sleep stays off; the jiggle test needs none.
   b.imu.enabled = true;

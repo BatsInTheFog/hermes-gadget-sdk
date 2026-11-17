@@ -203,6 +203,15 @@ sdmmc_card_t* mount(esp_err_t* err) {
   return mount_locked(err);
 }
 
+uint32_t free_mb() {
+  Lock lock;
+  if (!g_card) return 0;
+  FATFS* fs = nullptr;
+  DWORD free_clusters = 0;
+  if (f_getfree("0:", &free_clusters, &fs) != FR_OK || !fs) return 0;
+  return static_cast<uint32_t>(static_cast<uint64_t>(free_clusters) * fs->csize * 512 / (1024 * 1024));
+}
+
 void unmount() {
   Lock lock;
   if (!g_card) return;
