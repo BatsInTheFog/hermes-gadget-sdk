@@ -356,6 +356,7 @@ void dispatch(hg::App& app, hgp::Event& ev) {
     case EventType::TimeSynced:
       g_time.on_synced();  // writes the RTC from the now-set clock
       break;
+    case EventType::Wake: break;  // the tick after this shows the face frame just composed
   }
 }
 
@@ -664,9 +665,11 @@ extern "C" void app_main(void) {
                   for (;;) {
                     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
                     if (s_job) s_job(s_arg);
+                    hgp::events::post(hgp::EventType::Wake);  // show it now, not at the next 10 ms poll
                   }
                 },
-                "hg-face", 4096, nullptr, 3, &s_task, 1);
+                // Above the WebSocket client (5), which then runs on core 0 while a frame composes.
+                "hg-face", 4096, nullptr, 6, &s_task, 1);
           }
           if (s_task) xTaskNotifyGive(s_task);
           else job(arg);  // no task: compose here

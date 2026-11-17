@@ -1214,7 +1214,7 @@ void App::face_tick_async(uint32_t t) {
   };
   if (face_job_.load(std::memory_order_acquire) != 0) return show_it();  // still composing
   if (!model_.wisp || display_sleeping_ || !ui_) {
-    face_at_ = face_full_at_ = t;
+    face_at_ = face_full_at_ = face_step_at_ = t;
     return show_it();
   }
   apply_face_want();
@@ -1227,12 +1227,16 @@ void App::face_tick_async(uint32_t t) {
   const uint32_t ahead = face_job_us_ / 1000 + face_render_ms_;  // until this frame shows
   const uint32_t gap = face_render_ms_ + face_render_ms_ / 4;
   const uint32_t full_every = model_.screen == Screen::Clock ? kFaceClockFrameMs : kFaceFrameMs;
-  if (t - face_full_at_ >= std::max(full_every, gap)) {
+  const uint32_t every = std::max(full_every, gap);
+  if (t - face_full_at_ >= every) {
     if (replying) wisp_renderer_.set_talk_level(speaking() ? lip_level(t + ahead, t - face_at_) : 0.0f);
     else wisp_renderer_.set_talk_level(-1.0f);
-    wisp_renderer_.step(static_cast<float>(t - face_full_at_) / 1000.0f);
+    // The face moves by the time that really passed; frames keep a steady beat (one that came a
+    // little late doesn't push the next one back), unless they fell a whole beat behind.
+    wisp_renderer_.step(static_cast<float>(t - face_step_at_) / 1000.0f);
     ++face_full_frames_;
-    face_at_ = face_full_at_ = t;
+    face_step_at_ = face_at_ = t;
+    face_full_at_ = t - face_full_at_ >= 2 * every ? t : face_full_at_ + every;
   } else if (lane && t - face_at_ >= std::max(kFaceMouthMs, gap)) {
     wisp_renderer_.set_talk_level(lip_level(t + ahead, t - face_at_));
     wisp_renderer_.step_mouth();
