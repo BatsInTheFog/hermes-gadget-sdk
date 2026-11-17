@@ -1,5 +1,6 @@
 #include "hg/touch.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 
 namespace hg {
@@ -14,7 +15,7 @@ void TouchGestures::press(Button b) { app_.on_button(b, true, true); }
 void TouchGestures::release(Button b) { app_.on_button(b, false, true); }
 
 void TouchGestures::tick(uint32_t now_ms) {
-  if (state_ == State::Settings && now_ms - t0_ >= 1000) {
+  if ((state_ == State::Settings || (state_ == State::ChatEdge && on_title_)) && now_ms - t0_ >= 1000) {
     state_ = State::Ignored;
     app_.open_settings();
   }
@@ -70,6 +71,13 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
         release(Button::Up);
         app_.reveal_bars();
         break;
+      case State::ChatDrag:  // the lift's speed carries on (none if the finger had stopped)
+        app_.chat_fling(now_ms - last_t_ > 80 ? 0.0f : vel_ * 1000.0f);
+        break;
+      case State::ChatClose:
+        if (app_.chat_open()) app_.toggle_chat();
+        app_.reveal_bars();
+        break;
       case State::Talk: release(Button::Talk); break;
       case State::Swipe:
         release(Button::Cancel);
@@ -89,13 +97,20 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
     if (app_.wake_display()) { state_ = State::Ignored; return; }
     app_.mark_reply_read();  // what was on screen, before a notice over the reply closes
     app_.close_notices_for_input();  // a low battery alert goes, and the touch acts on what is under it
+    // The chat view's top strip comes first: a swipe down from it closes the view (and a still
+    // hold on the title there still opens settings, from tick()).
+    const bool chat = !from_clock_ && app_.chat_scroll_live();
     state_ = app_.profile_picker_open() ? State::Picker
+              : chat && app_.chat_top_edge(y) ? State::ChatEdge
               : !from_clock_ && app_.settings_title_hit(x, y) ? State::Settings
               : app_.settings_list_live() ? State::List
               : app_.camera_tap_live() ? State::Camera
+              : chat ? State::ChatPending
               : State::Pending;
+    if (state_ == State::ChatPending || state_ == State::ChatEdge) app_.chat_drag_begin();
     if (state_ == State::List) app_.settings_press(x, y);
     on_name_ = !from_clock_ && state_ == State::Pending && app_.profile_name_hit(x, y);
+    on_title_ = state_ == State::ChatEdge && app_.settings_title_hit(x, y);
     x0_ = x;
     y0_ = y;
     t0_ = now_ms;
@@ -140,6 +155,37 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
     case State::Up:
       dx_ = dx, dy_ = dy;
       break;
+    case State::ChatPending:
+    case State::ChatEdge:
+      if (state_ == State::ChatEdge) tick(now_ms);  // the title's settings hold
+      if (state_ == State::Ignored) break;
+      // From the top strip, a swipe down closes the view (on the lift).
+      if (state_ == State::ChatEdge && dy >= cfg_.swipe_px && std::abs(dx) < dy) {
+        state_ = State::ChatClose;
+      } else if (std::abs(dx) > cfg_.scroll_slop_px || std::abs(dy) > cfg_.scroll_slop_px) {
+        if (std::abs(dx) > std::abs(dy)) {  // sideways: a swipe left closes the view, as before
+          state_ = State::Side;
+          in_picker_ = false;
+          dx_ = dx, dy_ = dy;
+        } else if (state_ == State::ChatPending || dy < 0) {
+          state_ = State::ChatDrag;
+          last_y_ = y, last_t_ = now_ms, vel_ = 0;
+          app_.chat_drag(dy);
+        }
+      }
+      break;
+    case State::ChatDrag: {
+      const uint32_t dt = now_ms - last_t_;
+      if (dt > 0) {
+        // The finger's speed, smoothed over the last few samples.
+        const float v = static_cast<float>(y - last_y_) / static_cast<float>(dt);
+        const float k = std::min(1.0f, static_cast<float>(dt) / 40.0f);
+        vel_ += k * (v - vel_);
+        last_y_ = y, last_t_ = now_ms;
+      }
+      app_.chat_drag(dy);
+      break;
+    }
     case State::Settings:
       if (swiped_down) {
         state_ = State::Swipe;

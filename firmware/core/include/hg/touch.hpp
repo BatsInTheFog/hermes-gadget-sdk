@@ -17,7 +17,10 @@
 //                      scroll keys)
 //   swipe left         with chat_view, opens the conversation, or closes it again;
 //                      else the profile grid as above
-//   in the chat view   swipe down scrolls back (UP) instead of CANCEL; swipe up forward
+//   in the chat view   a drag scrolls the conversation with the finger (past scroll_slop_px it
+//                      is a scroll, never a hold), and it carries on after the lift, slowing to
+//                      a stop (a touch stops it); a swipe down that starts in the top strip (the
+//                      bar and the title) closes the view; a hold does not talk here
 //   any swipe          with autohide_bars, shows the top and hint bars for a while
 //
 // With the touch_talk setting off, holds and taps press TALK only where it doesn't
@@ -40,6 +43,7 @@ class TouchGestures {
     uint32_t hold_ms = 120;  // a still finger becomes TALK after this long
     int slop_px = 18;        // movement allowed before a touch stops being a hold or tap
     int swipe_px = 60;       // travel that makes a swipe, down or sideways
+    int scroll_slop_px = 8;  // in the chat view: movement that makes a touch a scroll
     bool swipe_cancel = true;
   };
 
@@ -56,7 +60,8 @@ class TouchGestures {
   void tick(uint32_t now_ms);
 
  private:
-  enum class State : uint8_t { Idle, Pending, Settings, Picker, PickerDrag, Side, List, ListDrag, Camera, Talk, Swipe, Up, Down, Ignored };
+  enum class State : uint8_t { Idle, Pending, Settings, Picker, PickerDrag, Side, List, ListDrag, Camera, Talk, Swipe, Up, Down,
+                               ChatPending, ChatEdge, ChatDrag, ChatClose, Ignored };
   void press(Button b);
   void release(Button b);
 
@@ -65,10 +70,14 @@ class TouchGestures {
   State state_ = State::Idle;
   int x0_ = 0, y0_ = 0;
   bool on_name_ = false;     // a Pending touch that started on the profile name
+  bool on_title_ = false;    // a ChatEdge touch that started on the title (a still hold: settings)
   bool from_clock_ = false;  // the touch began on the clock face, which the touch-down ended
   bool in_picker_ = false;   // a Side touch began on the profile grid (turns its page) rather than Ready
   int dx_ = 0, dy_ = 0;      // a Side touch's travel so far
   uint32_t t0_ = 0;
+  int last_y_ = 0;           // a chat drag: the last sample, and the finger's speed (px/ms)
+  uint32_t last_t_ = 0;
+  float vel_ = 0;
 };
 
 }  // namespace hg

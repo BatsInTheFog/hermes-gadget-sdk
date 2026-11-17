@@ -9908,3 +9908,65 @@ TEST("wisp face: sending face rows straight from its buffer shows exactly what c
   CHECK(b.fake.direct_rows > 0);
   CHECK_EQ(differ, 0);
 }
+
+TEST("chat view: a drag scrolls with the finger, carries on after the lift, and a hold never talks") {
+  Rig r(wisp_touch_profile());
+  r.bring_online(true);
+  for (int i = 0; i < 12; ++i) {  // a conversation much longer than the screen
+    const std::string turn = "t" + std::to_string(i);
+    r.app.submit_text("question number " + std::to_string(i));
+    r.server(R"({"type":"turn.start","turn":")" + turn + R"("})");
+    r.server(R"({"type":"reply","turn":")" + turn + R"(","text":"Answer number )" + std::to_string(i) +
+             R"(, which runs long enough to wrap onto a second line of the screen."})");
+    r.server(R"({"type":"turn.end","turn":")" + turn + R"(","outcome":"success"})");
+    r.advance(50);
+  }
+  r.advance(200);
+  r.app.toggle_chat();
+  CHECK(r.app.chat_open());
+  CHECK_EQ(r.app.model().scroll, -1);  // the newest lines
+  hg::TouchGestures touch(r.app);
+  // A slow drag down: older lines come into view, a line per line height, and it stops at the lift.
+  uint32_t t = r.fake.clock;
+  touch.update(true, 150, 120, t);
+  for (int y = 120; y <= 200; y += 5) touch.update(true, 150, y, t += 60);
+  r.advance(100);
+  touch.update(false, 0, 0, r.fake.clock);
+  const int after_drag = r.app.model().scroll;
+  CHECK(after_drag >= 0);
+  CHECK(!r.app.chat_flinging());
+  r.advance(500);
+  CHECK_EQ(r.app.model().scroll, after_drag);
+  CHECK(!r.fake.mic_on);
+  CHECK(r.app.chat_open());  // a drag down from the middle scrolls; it never closes the view
+  // A quick flick up: the text keeps going toward the newest lines after the lift, then stops.
+  t = r.fake.clock;
+  touch.update(true, 150, 200, t);
+  touch.update(true, 150, 185, t += 10);
+  touch.update(true, 150, 165, t += 10);
+  touch.update(true, 150, 140, t += 10);
+  touch.update(false, 0, 0, t);
+  const int at_lift = r.app.model().scroll;
+  CHECK(r.app.chat_flinging());
+  r.advance(2000);
+  CHECK(!r.app.chat_flinging());
+  CHECK(r.app.model().scroll == -1 || r.app.model().scroll > at_lift);
+  // A hold in the thread does not talk.
+  touch.update(true, 150, 200, r.fake.clock);
+  for (int i = 0; i < 10; ++i) r.advance(100), touch.tick(r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.fake.mic_on);
+  CHECK(r.app.screen() != hg::Screen::Listening);
+  // From the top strip, a swipe down closes the view.
+  touch.update(true, 150, 4, r.fake.clock);
+  touch.update(true, 152, 40, r.fake.clock);
+  touch.update(true, 154, 90, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.app.chat_open());
+  // Holding the title still for a second there still opens settings.
+  r.app.toggle_chat();
+  touch.update(true, 20, 4, r.fake.clock);
+  for (int i = 0; i < 11; ++i) r.advance(100), touch.tick(r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.settings_open());
+}
