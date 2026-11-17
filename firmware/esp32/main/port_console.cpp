@@ -9,6 +9,7 @@
 #include "esp_console.h"
 #include "esp_log.h"
 #include "hg/console_args.hpp"
+#include "port_sd.hpp"
 #include "sdkconfig.h"
 
 namespace hgp::console {
@@ -17,6 +18,11 @@ namespace {
 const char* TAG = "hg.console";
 
 int run(int argc, char** argv) {
+  // The microSD check runs here, on the console task: a long test never holds up the app.
+  if (argc && std::strcmp(argv[0], "sd") == 0) {
+    std::printf("%s\n", sd::command(argc, argv).c_str());
+    return 0;
+  }
   // ESP-IDF has already split the line and removed its quotes. `wifi` takes several
   // values that may hold spaces, so its arguments are quoted again.
   const bool quote = argc && std::strcmp(argv[0], "wifi") == 0;
@@ -45,7 +51,7 @@ int run(int argc, char** argv) {
 void begin() {
   static const char* const kCommands[] = {"help",      "status", "diag",   "get",         "set",       "say",       "camera",
                                           "talk",      "release", "cancel", "new-session", "reconnect", "forget-key",
-                                          "factory-reset", "settings", "wifi-setup", "wifi", "phone", "perf", "face"};
+                                          "factory-reset", "settings", "wifi-setup", "wifi", "phone", "perf", "face", "sd"};
   for (const char* name : kCommands) {
     esp_console_cmd_t cmd = {};
     cmd.command = name;

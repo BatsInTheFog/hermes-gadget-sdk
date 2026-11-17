@@ -369,8 +369,16 @@ BoardConfig make() {
   b.pwr_key = {true, 0x20, 4, true};
   b.axp2101 = true;
   b.rtc.enabled = true;  // PCF85063 at 0x51 on the shared bus keeps the time across power loss
-  // TCA9554: P0 LCD_RST, P1 the panel's power rail, P2 TOUCH_RST, P4 the PWR key (input).
-  b.expander_reset = {0x20, 0x07, 20, 150};
+  // TCA9554: P0 LCD_RST, P1 the panel's power rail, P2 TOUCH_RST, P4 the PWR key (input),
+  // P7 (EXIO7) the microSD card's DAT3/CS line: left high, so the card answers in SD mode.
+  b.expander_reset = {0x20, 0x87, 20, 150};
+  // microSD on SDMMC, 1-bit: CLK GPIO2, CMD GPIO1, DAT0 GPIO3 (Waveshare's pin_config.h and
+  // SD sketch, which also sets EXIO7 high first). Card power is the always-on 3.3 V rail.
+  b.sd.enabled = true;
+  b.sd.clk = 2;
+  b.sd.cmd = 1;
+  b.sd.d0 = 3;
+  b.sd.width = 1;
   b.buttons = {0, -1, -1, -1};  // BOOT also works as TALK
   b.talk_label = "BOOT";
   b.cancel_label = "Swipe down";

@@ -311,11 +311,13 @@ struct LatchPowerConfig {
   int key = -1;
 };
 
-// A microSD slot wired for 4-bit SDIO (port_sdlog.cpp mirrors the device log
-// to /sdcard/hermes.log). Pins are -1 when the board has no slot.
+// A microSD slot on the SDMMC host, 4-bit or 1-bit (port_sd.cpp mounts it at /sdcard;
+// port_sdlog.cpp mirrors the device log there). Pins are -1 when the board has no slot.
 struct SdConfig {
   bool enabled = false;
   int clk = -1, cmd = -1, d0 = -1, d1 = -1, d2 = -1, d3 = -1;
+  int width = 4;              // 1: d1-d3 unused (their card pins held high by the board)
+  int freq_khz = 20000;       // SDMMC_FREQ_DEFAULT; 40000 is high speed
 };
 
 struct BoardConfig {

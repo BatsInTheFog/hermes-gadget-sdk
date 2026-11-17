@@ -1,6 +1,7 @@
 // See port_sdlog.hpp.
 #include "port.hpp"  // first: pulls in FreeRTOS.h ahead of task.h/queue.h
 #include "port_sdlog.hpp"
+#include "port_sd.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -78,35 +79,12 @@ int SdLogger::hook(const char* fmt, va_list args) {
 
 void SdLogger::mount() {
   if (mounted_ || !g_capture.load()) return;
-  // Slot 0 for the card: slot 1 carries the C6 companion's SDIO link
   // (CONFIG_ESP_HOSTED_SDIO_SLOT_1), and SDMMC_HOST_DEFAULT() also picks 1.
-  sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-  host.slot = SDMMC_HOST_SLOT_0;
-  host.max_freq_khz = SDMMC_FREQ_DEFAULT;
-  sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
-  slot.width = 4;
-  slot.clk = static_cast<gpio_num_t>(sd_.clk);
-  slot.cmd = static_cast<gpio_num_t>(sd_.cmd);
-  slot.d0 = static_cast<gpio_num_t>(sd_.d0);
-  slot.d1 = static_cast<gpio_num_t>(sd_.d1);
-  slot.d2 = static_cast<gpio_num_t>(sd_.d2);
-  slot.d3 = static_cast<gpio_num_t>(sd_.d3);
-  esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {};
-  mount_cfg.format_if_mount_failed = false;  // never format the user's card
-  mount_cfg.max_files = 2;
-  // No card is the common case: keep IDF's sdmmc tags quiet around the attempt.
-  esp_log_level_set("sdmmc_cmd", ESP_LOG_NONE);
-  esp_log_level_set("sdmmc_sd", ESP_LOG_NONE);
-  esp_log_level_set("sdmmc_periph", ESP_LOG_NONE);
-  sdmmc_card_t* card = nullptr;
-  const esp_err_t err = esp_vfs_fat_sdmmc_mount(kMountPoint, &host, &slot, &mount_cfg, &card);
-  esp_log_level_set("sdmmc_cmd", ESP_LOG_WARN);
-  esp_log_level_set("sdmmc_sd", ESP_LOG_WARN);
-  esp_log_level_set("sdmmc_periph", ESP_LOG_WARN);
+  esp_err_t err = ESP_OK;
+  sdmmc_card_t* card = sd::mount(&err);  // shared with the `sd` console command
   if (err != ESP_OK) return;  // retry from the task; stay silent
   mounted_ = true;
   g_card = card;
-  ESP_LOGI(TAG, "mounted %s (%s)", kMountPoint, card->cid.name);
   open_file();
 }
 
@@ -151,7 +129,7 @@ void SdLogger::flush() {
     // when a card answers. The bytes in this batch are lost either way.
     std::fclose(file_);
     file_ = nullptr;
-    esp_vfs_fat_sdcard_unmount(kMountPoint, g_card);
+    sd::unmount();
     g_card = nullptr;
     mounted_ = false;
     ESP_LOGW(TAG, "write to the card failed; unmounted, retrying the card every 30 s");

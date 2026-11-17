@@ -3,6 +3,7 @@
 #include "port.hpp"  // first: pulls in FreeRTOS.h ahead of task.h/queue.h
 #include "port_cardputer.hpp"
 #include "port_sdlog.hpp"
+#include "port_sd.hpp"
 
 #include <cstring>
 #include <utility>
@@ -372,6 +373,7 @@ extern "C" void app_main(void) {
   // SD log mirror: starts disabled and syncs to the stored sd_log setting
   // below (off by default), so no file appears until it is switched on.
   // Boards without a slot stay silent.
+  hgp::sd::configure(board.sd);  // before anything mounts the card
   g_sdlog.begin(board.sd, false);
   power_rails_on(board);
   // A board whose amplifier hangs off the chip's own DAC (the CYD's SC8002B on
