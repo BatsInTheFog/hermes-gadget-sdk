@@ -10148,7 +10148,11 @@ struct FakeRecorder final : hg::AudioRecorder {
     return true;
   }
   void pause(bool on) override { st.state = on ? State::Paused : State::Recording; }
-  void stop() override { st.state = State::Finishing; }
+  bool discard = false;
+  void stop(bool d) override {
+    st.state = State::Finishing;
+    discard = d;
+  }
   Status status() override { return st; }
   void acknowledge() override { st.state = State::Idle; }
 };
@@ -10257,6 +10261,28 @@ TEST("recorder: two presses still only go home; slow presses never open it") {
   CHECK(x.r.app.screen() == hg::Screen::Listening);
   x.r.app.on_button(hg::Button::Talk, false);
   CHECK_EQ(x.rec.starts, 0);
+}
+
+TEST("recorder: 6 seconds or less is deleted, not saved") {
+  RecRig x;
+  x.press_talk_three_times();
+  x.rec.st.samples = 16000 * 6;  // exactly 6 s: still too short
+  x.r.advance(20);
+  x.tap(RecRig::kStopX, RecRig::kButtonY, 1050);
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Finishing);
+  CHECK(x.rec.discard);
+  x.rec.st.state = hg::AudioRecorder::State::Saved;
+  x.rec.st.discarded = true;
+  x.r.advance(20);
+  CHECK_EQ(x.r.app.model().rec.message, std::string("Not kept"));
+  x.r.advance(hg::App::kRecSavedMs + 50);
+  CHECK(!x.r.app.recorder_open());
+  // Just over 6 s is kept.
+  x.press_talk_three_times();
+  x.rec.st.samples = 16000 * 6 + 16;
+  x.r.advance(20);
+  CHECK(x.r.app.console("rec stop") == "@ok saving");
+  CHECK(!x.rec.discard);
 }
 
 TEST("recorder: the timer, Pause on a tap, Stop on a one-second hold, Saved, then the face") {
@@ -10378,6 +10404,7 @@ TEST("recorder: a failed card shows Not saved and goes back to the face") {
 TEST("recorder: the rec console command reports and drives it") {
   RecRig x;
   CHECK(x.r.app.console("rec").find("\"available\":true") != std::string::npos);
+  x.rec.st.samples = 16000 * 30;
   CHECK_EQ(x.r.app.console("rec start"), std::string("@ok recording"));
   CHECK(x.r.app.screen() == hg::Screen::Recorder);
   CHECK_EQ(x.r.app.console("rec pause"), std::string("@ok"));

@@ -125,6 +125,7 @@ bool SdRecorder::start(std::string_view name, std::string& error) {
     file_ = f;
     path_ = file;
     error_.clear();
+    discarded_ = false;
     state_ = State::Recording;
   }
   recording_.store(true, std::memory_order_release);
@@ -139,13 +140,14 @@ void SdRecorder::pause(bool on) {
   state_ = on ? State::Paused : State::Recording;
 }
 
-void SdRecorder::stop() {
+void SdRecorder::stop(bool discard) {
   {
     Locked l(lock_);
     if (state_ != State::Recording && state_ != State::Paused) return;
     state_ = State::Finishing;
   }
   recording_.store(false, std::memory_order_release);  // the mic's audio stops here
+  discard_.store(discard);
   stop_req_.store(true);
   xTaskNotifyGive(task_);
 }
@@ -159,6 +161,7 @@ SdRecorder::Status SdRecorder::status() {
   s.ring_peak = peak_.load(std::memory_order_relaxed);
   s.file = path_;
   s.error = error_;
+  s.discarded = discarded_;
   return s;
 }
 
@@ -194,6 +197,17 @@ bool SdRecorder::write_some(bool all) {
 }
 
 void SdRecorder::finish() {
+  if (discard_.load()) {  // too short to keep: gone, and nothing is left to upload
+    std::fclose(file_);
+    file_ = nullptr;
+    std::remove(path_.c_str());
+    head_.store(tail_.load());
+    ESP_LOGI(TAG, "deleted %s (too short)", path_.c_str());
+    Locked l(lock_);
+    discarded_ = true;
+    state_ = State::Saved;
+    return;
+  }
   if (!write_some(true)) return fail("card write failed");
   uint8_t header[44];
   hg::wav_header(header, static_cast<uint32_t>(std::min<uint64_t>(data_bytes_, 0xFFFFFFFFu - 36)), hg::kRecordRate);

@@ -89,7 +89,9 @@ void App::recorder_pause(bool on) {
 
 void App::recorder_stop() {
   if (!rec_open_ || (rec_phase_ != RecPhase::Recording && rec_phase_ != RecPhase::Paused)) return;
-  hal_.recorder->stop();
+  // Too short to keep (kRecordMinKeepS): deleted, never uploaded.
+  const bool keep = hal_.recorder->status().samples > static_cast<uint64_t>(kRecordMinKeepS) * kRecordRate;
+  hal_.recorder->stop(!keep);
   hal_.mic->stop();
   rec_phase_ = RecPhase::Saving;
   rec_stop_at_ = 0;
@@ -172,7 +174,10 @@ void App::recorder_tick() {
       break;
     }
     case RecPhase::Saving:
-      if (st.state == AudioRecorder::State::Saved) {
+      if (st.state == AudioRecorder::State::Saved && st.discarded) {
+        log(LogLevel::Info, "recorder: " + std::to_string(st.samples / kRecordRate) + " s, too short: deleted");
+        recorder_message("Not kept", std::to_string(kRecordMinKeepS) + " seconds or less", true, kRecSavedMs);
+      } else if (st.state == AudioRecorder::State::Saved) {
         const size_t slash = st.file.rfind('/');
         log(LogLevel::Info, "recorder: saved " + st.file + " (" + std::to_string(st.samples / kRecordRate) + " s" +
                                 (st.dropped ? ", " + std::to_string(st.dropped) + " samples dropped" : std::string()) +

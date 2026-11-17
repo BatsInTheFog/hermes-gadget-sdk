@@ -37,7 +37,7 @@ class SdRecorder final : public hg::AudioRecorder {
   bool ready() override;
   bool start(std::string_view name, std::string& error) override;
   void pause(bool on) override;
-  void stop() override;
+  void stop(bool discard) override;
   Status status() override;
   void acknowledge() override;
 
@@ -57,7 +57,8 @@ class SdRecorder final : public hg::AudioRecorder {
   FILE* file_ = nullptr;
   // Written by feed() (head) and the writer (tail); free-running sample counts.
   std::atomic<size_t> head_{0}, tail_{0};
-  std::atomic<bool> recording_{false}, paused_{false}, stop_req_{false};
+  std::atomic<bool> recording_{false}, paused_{false}, stop_req_{false}, discard_{false};
+  bool discarded_ = false;
   std::atomic<uint32_t> samples_{0}, dropped_{0}, peak_{0};
   uint64_t data_bytes_ = 0;  // on the card so far
   State state_ = State::Idle;

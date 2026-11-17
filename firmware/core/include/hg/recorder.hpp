@@ -19,6 +19,9 @@ namespace hg {
 
 // What a recording is written as: 16 kHz, 16-bit, mono (what Whisper wants; ~115 MB an hour).
 constexpr uint32_t kRecordRate = 16000;
+// A recording this long or shorter (recorded time, pauses left out) is deleted when it stops:
+// a pocket press or a demo never takes card space or reaches the upload.
+constexpr uint32_t kRecordMinKeepS = 6;
 
 // The level the mic art shows. Each ~50 ms block's RMS in dBFS is mapped from kQuietDb (frame
 // 1) to kLoudDb (frame 5). It rises at once and falls back over about kReleaseMs, so the art
@@ -84,6 +87,7 @@ class AudioRecorder {
     uint32_t ring_peak = 0;  // the most the ring buffer held, in percent
     std::string file;        // its path on the card
     std::string error;
+    bool discarded = false;  // Saved: the file was deleted instead (stop(true))
   };
   virtual ~AudioRecorder() = default;
   // Whether a card is there to record to (mounts it if need be).
@@ -93,8 +97,8 @@ class AudioRecorder {
   // Paused: the mic's audio is not kept; the same file goes on when resumed.
   virtual void pause(bool on) = 0;
   // Writes out what is buffered and closes the file; status() goes Finishing, then Saved
-  // (or Failed).
-  virtual void stop() = 0;
+  // (or Failed). `discard`: closes and deletes it instead (Saved, with `discarded`).
+  virtual void stop(bool discard = false) = 0;
   virtual Status status() = 0;
   // Saved or Failed back to Idle, once the app has shown it.
   virtual void acknowledge() = 0;
