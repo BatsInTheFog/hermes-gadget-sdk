@@ -70,6 +70,10 @@ struct DeviceProfile {
   // Runs job(arg) once on another core and returns at once (Wisp's face composes there while
   // the app task keeps audio, touch and the connection going). Null: the face composes inline.
   void (*face_async)(void (*job)(void*), void* arg) = nullptr;
+  // The idle ladder (Wisp): Awake, Resting (slower face), Dozing (asleep, dim) and Screen off,
+  // each after its own setting since the last interaction, instead of screen_timeout's dim and
+  // dark steps and the clock setting's resting clock (App::IdleStage).
+  bool idle_ladder = false;
   // The touchscreen's pixels per inch, so tap targets are about 7 mm tall; 0 assumes kDefaultTouchPpi.
   uint16_t touch_ppi = 0;
   static constexpr uint16_t kDefaultTouchPpi = 200;
@@ -304,6 +308,13 @@ class App {
   // (about three connection attempts), then is dropped.
   static constexpr uint32_t kRecordingWaitMs = 45000;
   bool dozing() const { return dozing_; }
+  // The idle ladder (DeviceProfile::idle_ladder): where the screen is on it.
+  enum class IdleStage : uint8_t { Awake, Resting, Dozing, Off };
+  IdleStage idle_stage() const { return idle_stage_; }
+  static constexpr uint32_t kRestFrameMs = 125;  // resting: about 8 face frames a second
+  static constexpr uint32_t kDozeFrameMs = 250;  // dozing: about 4
+  // A jiggle or pick-up wakes her: the acceleration changing this much between samples (mg).
+  static constexpr int kJiggleMg = 220;
   bool start_wifi_setup();
   void close_wifi_setup();
   bool wifi_setup_open() const { return !wifi_setup_text_.empty(); }
@@ -723,6 +734,17 @@ class App {
   void dismiss_charging_notice(bool darken);
   bool display_dimmed_ = false, display_sleeping_ = false, power_off_armed_ = false;
   bool dozing_ = false, on_battery_ = false;
+  IdleStage idle_stage_ = IdleStage::Awake;
+  // The ladder's settings (ms; 0: never), on battery and on USB power.
+  uint32_t rest_ms_ = 30000, doze_ms_ = 120000, off_ms_ = 300000;
+  uint32_t rest_usb_ms_ = 60000, doze_usb_ms_ = 600000, off_usb_ms_ = 1800000;
+  bool doze_clock_ = true;  // dozing shows the resting clock (asleep, with the time) when it can
+  uint8_t face_wake_ = 0;   // a wake-up to play on the face: 1 from dozing, 2 from the screen off
+  int16_t jiggle_prev_[3] = {0, 0, 0};
+  bool jiggle_seen_ = false;
+  void ladder_tick(bool busy, bool settled, bool ringing);
+  void enter_stage(IdleStage s);
+  uint32_t face_frame_ms() const;
   void set_dozing(bool dozing);
   // Face-down sleep. Stamps are 0 until set (now() | 1 keeps 0 meaning "none").
   int16_t motion_[3] = {0, 0, 0};
@@ -975,7 +997,7 @@ private:
   struct FaceWant {
     bool set = false;
     WispState state = WispState::Idle;
-    float scale = 1, eye_y = -1, baseline = 0, mic = -1;
+    float scale = 1, eye_y = -1, baseline = 0, mic = -1, calm = 1;
   } face_want_;
   void apply_face_want();
   static void face_job_entry(void* app);

@@ -9970,3 +9970,155 @@ TEST("chat view: a drag scrolls with the finger, carries on after the lift, and 
   touch.update(false, 0, 0, r.fake.clock);
   CHECK(r.app.settings_open());
 }
+
+namespace {
+// Wisp's board: the face, the touchscreen, the idle ladder and a motion sensor, on battery.
+struct LadderRig {
+  std::vector<uint8_t> file = wisp_file();
+  AlertPower battery;
+  Rig r;
+  explicit LadderRig() : r(profile(file)) {
+    r.hal.power = &battery;
+    r.fake.backlight = true;
+    r.fake.wall_ok = true;
+    r.bring_online(true);
+    CHECK_EQ(r.app.console("set brightness 80"), std::string("@ok brightness"));
+  }
+  static hg::DeviceProfile profile(const std::vector<uint8_t>& f) {
+    hg::DeviceProfile p = wisp_profile(f);
+    p.autohide_bars = true;
+    p.chat_view = true;
+    p.idle_ladder = true;
+    p.motion_sensor = true;
+    return p;
+  }
+  // Waits with the server's heartbeat (the connection stays settled).
+  void wait(uint32_t ms) {
+    for (uint32_t done = 0; done < ms; done += 1000) {
+      r.server(R"({"type":"ping"})");
+      r.advance(std::min<uint32_t>(1000, ms - done));
+    }
+  }
+  hg::App::IdleStage stage() const { return r.app.idle_stage(); }
+};
+using Stage = hg::App::IdleStage;
+}  // namespace
+
+TEST("idle ladder: awake, resting at 30 s, dozing asleep and dim at 2 min, screen off at 5 min") {
+  LadderRig l;
+  auto& r = l.r;
+  CHECK(l.stage() == Stage::Awake);
+  l.wait(29000);
+  CHECK(l.stage() == Stage::Awake);
+  CHECK_EQ(r.fake.brightness, 80);
+  l.wait(2000);
+  CHECK(l.stage() == Stage::Resting);
+  CHECK_EQ(r.fake.brightness, 80);  // resting keeps the brightness
+  // Resting: about 8 face frames a second.
+  uint32_t f0 = r.app.model().wisp_frame;
+  l.wait(2000);
+  const uint32_t resting = r.app.model().wisp_frame - f0;
+  CHECK(resting >= 12 && resting <= 20);
+  l.wait(120000 - 33000 + 1000);  // 31 + 2 s so far
+  CHECK(l.stage() == Stage::Dozing);
+  CHECK(face_is(r, "sleepy"));
+  CHECK(r.fake.brightness > 0 && r.fake.brightness <= 10);  // dim
+  f0 = r.app.model().wisp_frame;
+  l.wait(2000);
+  const uint32_t dozing = r.app.model().wisp_frame - f0;
+  CHECK(dozing >= 6 && dozing <= 10);  // about 4 a second
+  l.wait(300000 - 123000 + 1000);  // 121 + 2 s so far
+  CHECK(l.stage() == Stage::Off);
+  CHECK_EQ(r.fake.brightness, 0);
+}
+
+TEST("idle ladder: an exchange holds her awake; the countdown starts when it ends") {
+  LadderRig l;
+  auto& r = l.r;
+  l.wait(20000);
+  r.app.submit_text("hello");
+  r.server(R"({"type":"turn.start","turn":"t1"})");
+  l.wait(200000);  // Hermes thinking for a long time: still awake
+  CHECK(l.stage() == Stage::Awake);
+  r.server(R"({"type":"reply","turn":"t1","text":"Hi."})");
+  r.server(R"({"type":"turn.end","turn":"t1","outcome":"success"})");
+  l.wait(25000);
+  CHECK(l.stage() == Stage::Awake);  // 30 s from the end of the exchange, not from its start
+  l.wait(7000);
+  CHECK(l.stage() == Stage::Resting);
+}
+
+TEST("idle ladder: a message from Hermes wakes her from the dark") {
+  LadderRig l;
+  auto& r = l.r;
+  l.wait(301000);
+  CHECK(l.stage() == Stage::Off);
+  r.server(R"({"type":"turn.start","turn":"t9"})");
+  r.server(R"({"type":"reply","turn":"t9","text":"A reminder for you."})");
+  r.advance(100);
+  CHECK(l.stage() == Stage::Awake);
+  CHECK_EQ(r.fake.brightness, 80);
+  CHECK(!r.app.model().hero);  // the reply's text, not the face: no wake-up waits for later
+  r.server(R"({"type":"turn.end","turn":"t9","outcome":"success"})");
+  l.wait(3000);
+  CHECK(r.app.model().wisp != nullptr && !r.app.model().wisp->waking());
+}
+
+TEST("idle ladder: the touch or press that wakes her from dozing or the dark only wakes her") {
+  LadderRig l;
+  auto& r = l.r;
+  hg::TouchGestures touch(r.app);
+  l.wait(121000);
+  CHECK(l.stage() == Stage::Dozing);
+  // A hold on the dozing face: it wakes her and nothing records.
+  touch.update(true, 180, 200, r.fake.clock);
+  for (int i = 0; i < 10; ++i) r.advance(100), touch.tick(r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(l.stage() == Stage::Awake);
+  CHECK(!r.fake.mic_on);
+  CHECK(r.app.screen() != hg::Screen::Listening);
+  // In the dark, a TALK press wakes her and its release does nothing.
+  l.wait(301000);
+  CHECK(l.stage() == Stage::Off);
+  r.app.on_button(hg::Button::Talk, true);
+  r.advance(800);
+  r.app.on_button(hg::Button::Talk, false);
+  CHECK(l.stage() == Stage::Awake);
+  CHECK(!r.fake.mic_on);
+  // While resting she is in view: a touch there acts as usual (and counts as interaction).
+  l.wait(31000);
+  CHECK(l.stage() == Stage::Resting);
+  touch.update(true, 180, 200, r.fake.clock);
+  for (int i = 0; i < 3; ++i) r.advance(100), touch.tick(r.fake.clock);
+  CHECK(r.fake.mic_on);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(l.stage() == Stage::Awake);
+}
+
+TEST("idle ladder: a pick-up or shake wakes her; lying still does not") {
+  LadderRig l;
+  auto& r = l.r;
+  for (int i = 0; i < 10; ++i) r.app.on_motion(10, -20, 1000), r.advance(100);
+  l.wait(121000);
+  for (int i = 0; i < 20; ++i) r.app.on_motion(12, -18, 1004), r.advance(100);  // sensor noise
+  CHECK(l.stage() == Stage::Dozing);
+  r.app.on_motion(260, 120, 900);  // picked up
+  r.advance(100);
+  CHECK(l.stage() == Stage::Awake);
+  CHECK(r.app.model().wisp->waking());
+}
+
+TEST("idle ladder: on USB power the longer timeouts apply") {
+  LadderRig l;
+  auto& r = l.r;
+  l.battery.on_usb(60);
+  l.wait(6000);  // the next 5 s reading sees the cable
+  l.wait(31000);
+  CHECK(l.stage() == Stage::Awake);  // 60 s on USB
+  l.wait(30000);
+  CHECK(l.stage() == Stage::Resting);
+  l.wait(200000);
+  CHECK(l.stage() == Stage::Resting);  // dozing after 10 min on USB
+  CHECK_EQ(r.app.console("set doze_after_usb 0"), std::string("@ok doze_after_usb"));
+  CHECK(r.app.console("set off_after 99999").rfind("@error", 0) == 0);
+}

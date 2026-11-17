@@ -124,6 +124,13 @@ class WispFaceRenderer {
   // the next draw() redraws just a band of rows around the mouth.
   void step_mouth();
   bool mouth_only() const { return mouth_only_; }
+  // Glances come `k` times further apart (2: resting; 1: as the state says).
+  void set_calm(float k) { calm_ = k > 0 ? k : 1; }
+  // A wake-up from sleep: the eyes open over about half a second (shut, half, open) and the
+  // flame flares up as it grows back. from_ember: it starts from the sleeping flame.
+  void wake_up(bool from_ember);
+  bool waking() const { return wake_t_ >= 0 && pose_.t - wake_t_ < kWakeS; }
+  static constexpr float kWakeS = 0.9f;
   // Draws the current frame. Clears to black first: only the rows the previous frame drew,
   // when it is the same buffer (the rest is black already), else every row. After
   // step_mouth(), only the mouth's band of rows.
@@ -217,6 +224,8 @@ class WispFaceRenderer {
   // The previous draw(): its buffer and the rows it wrote, and the rows the last draw changed.
   mutable const uint16_t* last_px_ = nullptr;
   bool mouth_only_ = false;  // the last step was step_mouth(): draw() redraws the mouth band
+  float calm_ = 1;           // set_calm
+  float wake_t_ = -1;        // when wake_up() began (pose time), or -1
   mutable int mouth_y0_ = 0, mouth_y1_ = 0;  // the rows the last drawn mouth covered
   mutable int last_y0_ = 0, last_y1_ = 0, changed_y0_ = 0, changed_y1_ = 0;
 };

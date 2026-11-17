@@ -376,6 +376,10 @@ BoardConfig make() {
   b.cancel_label = "Swipe down";
   b.autohide_bars = true;  // the face alone; a swipe shows the bars for a few seconds
   b.chat_view = true;      // swipe left: the conversation so far
+  b.idle_ladder = true;    // awake, resting, dozing, screen off (Wisp)
+  // QMI8658 at 0x6B: a pick-up or shake wakes her. Axes not yet checked against the glass, so
+  // face_down_sleep stays off; the jiggle test needs none.
+  b.imu.enabled = true;
   return b;
 }
 #elif CONFIG_HG_BOARD_AMOLED_206

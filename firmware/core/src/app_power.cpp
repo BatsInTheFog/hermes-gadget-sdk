@@ -71,8 +71,12 @@ bool App::wake_display() {
   activity_at_ = now();
   const bool sleeping = display_sleeping_;
   const bool was_clock = clock_showing_;
+  const IdleStage was = idle_stage_;
+  idle_stage_ = IdleStage::Awake;
   clock_showing_ = false;  // the clock ends at once, with the dim and sleep states
-  if (display_dimmed_ || sleeping || was_clock) {
+  // Waking from dozing or the dark plays her wake-up (eyes open, the flame brightens).
+  if (profile_.idle_ladder && was >= IdleStage::Dozing) face_wake_ = was == IdleStage::Off ? 2 : 1;
+  if (display_dimmed_ || sleeping || was_clock || was != IdleStage::Awake) {
     if (sleeping && reply_unread_ && mode_ == Mode::Idle && !reply_.empty()) {
       // A reply no input has met since it arrived: the screen may have gone dark
       // before anyone read it. The wake shows it again from the top, for the usual time.
@@ -87,7 +91,52 @@ bool App::wake_display() {
     if (ui_) ui_->invalidate();
     update_model();
   }
-  return sleeping;
+  // The input that woke her from dozing only wakes her, as from the dark.
+  return sleeping || (profile_.idle_ladder && was == IdleStage::Dozing);
+}
+
+void App::enter_stage(IdleStage s) {
+  idle_stage_ = s;
+  static const char* const kNames[] = {"awake", "resting", "dozing", "screen off"};
+  log(LogLevel::Info, std::string("idle: ") + kNames[static_cast<int>(s)]);
+  if (s >= IdleStage::Dozing) {
+    // A list left open closes, and the conversation gives way to her asleep face.
+    if (menu_open()) dismiss_overlay();
+    if (chat_open_) toggle_chat();
+  }
+  if (s == IdleStage::Dozing) {
+    display_dimmed_ = true;
+    // Asleep with the time when it is known (the resting clock), else her asleep face.
+    clock_showing_ = doze_clock_ && wall_valid_ && phase_ == Phase::Online && paired_;
+  } else if (s == IdleStage::Off) {
+    clock_showing_ = false;
+    display_sleeping_ = true;
+  }
+  apply_backlight();
+  update_model();
+}
+
+void App::ladder_tick(bool busy, bool settled, bool ringing) {
+  // Something for the user holds her awake, and the countdown starts once it is over.
+  if (busy || (!settled && idle_stage_ != IdleStage::Off)) {
+    wake_display();
+    return;
+  }
+  if (ringing) {
+    if (idle_stage_ >= IdleStage::Dozing) wake_display();
+    return;
+  }
+  if (face_down_) return;
+  const bool usb = power_status_ && power_status_->external_power == true;
+  const uint32_t rest = usb ? rest_usb_ms_ : rest_ms_, doze = usb ? doze_usb_ms_ : doze_ms_,
+                 off = usb ? off_usb_ms_ : off_ms_;
+  const uint32_t e = now() - activity_at_;
+  IdleStage want = IdleStage::Awake;
+  if (off && e >= off) want = IdleStage::Off;
+  else if (doze && e >= doze) want = IdleStage::Dozing;
+  else if (rest && e >= rest) want = IdleStage::Resting;
+  // Down a step at a time (each shows for at least a tick); only an interaction comes back up.
+  if (want > idle_stage_) enter_stage(static_cast<IdleStage>(static_cast<int>(idle_stage_) + 1));
 }
 
 void App::set_dozing(bool dozing) {
@@ -336,6 +385,18 @@ void App::power_tick() {
     }
   }
   bool doze = false;
+  if (profile_.idle_ladder && hal_.display && hal_.display->info().has_backlight) {
+    // The idle ladder replaces the screen timeout's dim and dark steps.
+    const bool busy = screen_busy();
+    const bool settled = phase_ == Phase::NoNetwork || (phase_ == Phase::Online && paired_);
+    const bool ringing = alarm_ringing_;
+    ladder_tick(busy, settled, ringing);
+    // Dark, idle and on battery: the chip light-sleeps between events and Wi-Fi listens
+    // sparingly (the port's lowest modes that keep the Hermes connection).
+    doze = !busy && !ringing && settled && display_sleeping_ && on_battery_;
+    set_dozing(doze);
+    return;
+  }
   // Without a timeout, only a screen the power key turned off needs watching.
   if (hal_.display && hal_.display->info().has_backlight && (screen_timeout_ms_ || display_sleeping_)) {
     // The settings menu can sleep too; the wake input leaves it on the same item.
@@ -388,6 +449,16 @@ void App::on_motion(int16_t x_mg, int16_t y_mg, int16_t z_mg) {
   motion_[2] = z_mg;
   motion_at_ = now();
   motion_seen_ = true;
+  if (profile_.idle_ladder) {
+    // A pick-up or a shake: the acceleration jumps between samples. It counts as interaction.
+    const int d = std::abs(x_mg - jiggle_prev_[0]) + std::abs(y_mg - jiggle_prev_[1]) + std::abs(z_mg - jiggle_prev_[2]);
+    if (jiggle_seen_ && d >= kJiggleMg && !face_down_) {
+      if (idle_stage_ != IdleStage::Awake) log(LogLevel::Info, "idle: moved, awake");
+      wake_display();
+    }
+    jiggle_prev_[0] = x_mg, jiggle_prev_[1] = y_mg, jiggle_prev_[2] = z_mg;
+    jiggle_seen_ = true;
+  }
 }
 
 void App::motion_tick() {
@@ -464,6 +535,7 @@ bool App::clock_blocked() const {
 }
 
 void App::clock_tick() {
+  if (profile_.idle_ladder) return;  // the idle ladder shows the clock while she dozes
   if (clock_blocked()) {
     // Rest starts when the block ends, never during it.
     clock_rest_at_ = now();

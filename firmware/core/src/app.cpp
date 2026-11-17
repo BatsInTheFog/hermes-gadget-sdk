@@ -78,6 +78,7 @@ constexpr uint32_t kBackoffMs[] = {1000, 2000, 4000, 8000, 15000, 30000};
 constexpr size_t kBackoffSteps = sizeof(kBackoffMs) / sizeof(kBackoffMs[0]);
 
 const char* const kSettingKeys[] = {"name", "server", "token", "talk_mode", "volume", "brightness", "screen_timeout", "battery_display", "battery_estimate", "language", "wifi_ssid", "wifi_pass",
+                                    "rest_after", "doze_after", "off_after", "rest_after_usb", "doze_after_usb", "off_after_usb", "doze_clock",
                                     "face_down_sleep", "clock", "time_format", "touch_wake", "battery_alert", "battery_alert_sound", "charging_notice", "charging_sound", "charged_notice", "charged_sound", "double_home", "wake_talk", "touch_talk", "profile_grid", "wifi_deep_sleep", "animation", "sd_log"};
 
 // NVS limits storage keys to 15 characters; keep the public setting name unchanged.
@@ -262,12 +263,23 @@ void App::load_settings() {
     profile_grid_ = static_cast<uint8_t>(grid == 4 || grid == 6 || grid == 16 ? grid : 9);
   }
   clock_after_ms_ = static_cast<uint32_t>(std::max(0, std::min(3600, std::atoi(setting("clock", "0").c_str())))) * 1000;
+  {
+    // The idle ladder: seconds after the last interaction (0: never), on battery and on USB.
+    auto secs = [&](const char* key, const char* def) {
+      return static_cast<uint32_t>(std::max(0, std::min(86400, std::atoi(setting(key, def).c_str())))) * 1000;
+    };
+    rest_ms_ = secs("rest_after", "30"), doze_ms_ = secs("doze_after", "120"), off_ms_ = secs("off_after", "300");
+    rest_usb_ms_ = secs("rest_after_usb", "60"), doze_usb_ms_ = secs("doze_after_usb", "600");
+    off_usb_ms_ = secs("off_after_usb", "1800");
+    doze_clock_ = setting("doze_clock", "on") != "off";
+  }
   clock_24h_ = setting("time_format", "24h") != "12h";
   tailnet_on_ = profile_.tailnet && setting("tailnet", "off") == "on";
   tailnet_key_ = profile_.tailnet ? setting("ts_key") : std::string();
   if (face_down_) return;  // a face-down screen stays dark until the gadget is turned over
   activity_at_ = now();
   display_dimmed_ = display_sleeping_ = false;
+  idle_stage_ = IdleStage::Awake;
   clock_showing_ = false;  // a setting change is activity: the clock starts its rest again
   apply_backlight();
 }
@@ -1131,6 +1143,10 @@ void App::wisp_model(UiModel& m) {
       face = m.hero && !chat_open_;
       if (static_cast<int32_t>(face_sad_until_ - t) > 0) want = WispState::Sad;
       else if (static_cast<int32_t>(face_success_until_ - t) > 0) want = WispState::Success;
+      if (profile_.idle_ladder && idle_stage_ >= IdleStage::Dozing) {
+        want = WispState::Sleepy;  // asleep: eyes shut, the flame an ember, no text over her
+        if (face) m.headline.clear(), m.detail.clear();
+      }
       break;
     case Screen::Clock:
       face = clock = true;
@@ -1138,7 +1154,10 @@ void App::wisp_model(UiModel& m) {
       break;
     default: break;
   }
-  if (!face) return;
+  if (!face) {
+    face_wake_ = 0;  // a wake-up plays only on a face that is showing
+    return;
+  }
   if (face_forced_) want = face_force_;
   const int h = ui_ ? ui_->area().height : 448;
   face_want_.set = true;
@@ -1147,6 +1166,7 @@ void App::wisp_model(UiModel& m) {
   face_want_.eye_y = clock ? h * 0.3f : -1.0f;
   face_want_.baseline = ui_ ? static_cast<float>(ui_->wisp_text_top() - 4) : 0.0f;
   face_want_.mic = m.screen == Screen::Listening ? level_ / 100.0f : -1.0f;
+  face_want_.calm = profile_.idle_ladder && idle_stage_ == IdleStage::Resting ? 2.0f : 1.0f;
   m.wisp = &wisp_renderer_;
   m.wisp_async = profile_.face_async != nullptr;
   m.wisp_busy = face_job_.load(std::memory_order_acquire) == 1;
@@ -1164,6 +1184,17 @@ void App::apply_face_want() {
   wisp_renderer_.set_view(face_want_.scale, face_want_.eye_y);
   if (ui_) wisp_renderer_.set_prop_baseline(face_want_.baseline);
   wisp_renderer_.set_mic_level(face_want_.mic);
+  wisp_renderer_.set_calm(face_want_.calm);
+  if (face_wake_) {
+    wisp_renderer_.wake_up(face_wake_ == 2);
+    face_wake_ = 0;
+  }
+}
+
+uint32_t App::face_frame_ms() const {
+  if (profile_.idle_ladder && idle_stage_ == IdleStage::Dozing) return kDozeFrameMs;
+  if (profile_.idle_ladder && idle_stage_ == IdleStage::Resting) return kRestFrameMs;
+  return model_.screen == Screen::Clock ? kFaceClockFrameMs : kFaceFrameMs;
 }
 
 void App::face_job_entry(void* arg) {
@@ -1226,7 +1257,8 @@ void App::face_tick_async(uint32_t t) {
   const bool lane = replying && speaking();
   const uint32_t ahead = face_job_us_ / 1000 + face_render_ms_;  // until this frame shows
   const uint32_t gap = face_render_ms_ + face_render_ms_ / 4;
-  const uint32_t full_every = model_.screen == Screen::Clock ? kFaceClockFrameMs : kFaceFrameMs;
+  // A wake-up plays at the full rate, whatever the stage was.
+  const uint32_t full_every = wisp_renderer_.waking() ? kFaceFrameMs : face_frame_ms();
   const uint32_t every = std::max(full_every, gap);
   if (t - face_full_at_ >= every) {
     if (replying) wisp_renderer_.set_talk_level(speaking() ? lip_level(t + ahead, t - face_at_) : 0.0f);
@@ -2827,8 +2859,8 @@ void App::tick() {
     }
   } else if (face_on) {
     const uint32_t interval = lane                             ? kFaceSpeakFullMs
-                              : model_.screen == Screen::Clock ? kFaceClockFrameMs  // asleep: slower
-                                                               : kFaceFrameMs;
+                              : wisp_renderer_.waking() ? kFaceFrameMs
+                                                        : face_frame_ms();  // asleep or resting: slower
     if (t - face_full_at_ >= std::max(interval, face_cost_ms_ + face_cost_ms_ / 4)) {
       // A reply being spoken: the mouth follows the loudness being heard, closed between
       // bursts, aimed at when this frame will show (drawing and sending it takes about as long
@@ -3498,6 +3530,13 @@ std::string App::console(std::string_view raw) {
         (value.size() > 4 || value.find_first_not_of("0123456789") != std::string::npos ||
          (std::atoi(value.c_str()) != 0 && (std::atoi(value.c_str()) < 5 || std::atoi(value.c_str()) > 3600))))
       return "@error clock must be 0 (off) or 5..3600 seconds";
+    if ((key == "rest_after" || key == "doze_after" || key == "off_after" || key == "rest_after_usb" ||
+         key == "doze_after_usb" || key == "off_after_usb") &&
+        !value.empty() &&
+        (value.size() > 5 || value.find_first_not_of("0123456789") != std::string::npos || std::atoi(value.c_str()) > 86400))
+      return "@error " + key + " must be 0 (never) or up to 86400 seconds";
+    if (key == "doze_clock" && !value.empty() && value != "on" && value != "off")
+      return "@error doze_clock must be on or off";
     if (key == "time_format" && !value.empty() && value != "12h" && value != "24h")
       return "@error time_format must be 12h or 24h";
     if (key == "tailnet" && !value.empty() && value != "on" && value != "off")

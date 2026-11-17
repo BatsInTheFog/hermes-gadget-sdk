@@ -165,6 +165,12 @@ void App::settings_input(Button button, bool pressed) {
       check_result_ = tr(i18n::Msg::InputCheckRunning);
       break;
     case Menu::IdleTimer: {
+      if (profile_.idle_ladder) {  // the screen-off step of the idle ladder
+        const uint32_t s = off_ms_ / 1000;
+        const uint32_t next = s == 0 ? 120 : s < 300 ? 300 : s < 600 ? 600 : s < 1800 ? 1800 : 0;
+        console("set off_after " + std::to_string(next));
+        break;
+      }
       const uint32_t seconds = screen_timeout_ms_ / 1000;
       const uint32_t next = seconds == 0 ? 30 : seconds < 60 ? 60 : seconds < 120 ? 120 : seconds < 300 ? 300 : 0;
       console("set screen_timeout " + std::to_string(next));
@@ -221,6 +227,10 @@ void App::settings_input(Button button, bool pressed) {
       console(face_down_sleep_ ? "set face_down_sleep off" : "set face_down_sleep on");
       break;
     case Menu::Clock: {
+      if (profile_.idle_ladder) {  // dozing with the time, or her asleep face alone
+        console(doze_clock_ ? "set doze_clock off" : "set doze_clock on");
+        break;
+      }
       // Off, then the same steps as the screen timeout, then Off again.
       const uint32_t seconds = clock_after_ms_ / 1000;
       const uint32_t next = seconds == 0 ? 30 : seconds < 60 ? 60 : seconds < 120 ? 120 : seconds < 300 ? 300 : 0;
@@ -565,6 +575,10 @@ void App::settings_item(Menu item, UiModel& m) const {
       break;
     case Menu::IdleTimer:
       m.detail = tr(Msg::ScreenTimeout);
+      if (profile_.idle_ladder) {
+        m.body = off_ms_ ? tr(Msg::TimeoutSeconds, {std::to_string(off_ms_ / 1000)}) : std::string(tr(Msg::TimeoutAlwaysOn));
+        break;
+      }
       m.body = screen_timeout_ms_ ? tr(Msg::TimeoutSeconds, {std::to_string(screen_timeout_ms_ / 1000)})
                                  : std::string(tr(Msg::TimeoutAlwaysOn));
       break;
@@ -627,6 +641,11 @@ void App::settings_item(Menu item, UiModel& m) const {
     case Menu::Clock:
       m.detail = tr(Msg::ClockFace);
       // The body says when the face is off, or why it has not appeared yet.
+      if (profile_.idle_ladder) {
+        m.body = !doze_clock_ || !doze_ms_ ? std::string(tr(Msg::ClockOff))
+                 : tr(wall_valid_ ? Msg::ClockAfterSeconds : Msg::ClockNoTime, {std::to_string(doze_ms_ / 1000)});
+        break;
+      }
       if (!clock_after_ms_) m.body = tr(Msg::ClockOff);
       else m.body = tr(wall_valid_ ? Msg::ClockAfterSeconds : Msg::ClockNoTime, {std::to_string(clock_after_ms_ / 1000)});
       break;

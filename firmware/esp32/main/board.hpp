@@ -371,6 +371,7 @@ struct BoardConfig {
   // Touch UI options (hg::DeviceProfile): bars hidden until a swipe, and a swipe-left chat view.
   bool autohide_bars = false;
   bool chat_view = false;
+  bool idle_ladder = false;  // DeviceProfile::idle_ladder
 };
 
 // GPIO held high to power the panel's peripheral rail. Boards without one

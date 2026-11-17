@@ -468,9 +468,23 @@ void WispFaceRenderer::set_state(WispState s) {
   if (s == WispState::Sleepy) target_x_ = 0, target_y_ = 0.35f;
 }
 
+void WispFaceRenderer::wake_up(bool from_ember) {
+  const StateLook& asleep = looks_[static_cast<int>(WispState::Sleepy)];
+  if (from_ember) pose_.fl_size = asleep.fl_size, pose_.fl_bright = asleep.fl_bright;
+  wake_t_ = pose_.t;
+  next_blink_ = pose_.t + 2;  // no blink on top of the eyes opening
+}
+
 void WispFaceRenderer::choose_gaze(float dt) {
   const float t = pose_.t;
   if (t < next_glance_) return;
+  struct Calm {  // resting: whatever wait the gaze picks below, longer
+    WispFaceRenderer& r;
+    float t;
+    ~Calm() {
+      if (r.calm_ != 1 && r.next_glance_ > t) r.next_glance_ = t + (r.next_glance_ - t) * r.calm_;
+    }
+  } calm{*this, t};
   const StateLook& look = looks_[static_cast<int>(state_)];
   bool big = false;
   switch (look.gaze) {
@@ -739,7 +753,9 @@ void WispFaceRenderer::draw_pose(FaceFrame& f, const Pose& p, bool clear) const 
                        (1 + 0.08f * flare_k * std::sin(std::min(1.0f, (t - p.flare_t) / 0.25f) * kPi / 2));
     const float breathe = 1 + 0.025f * std::sin(t * 1.7f);
     const float pulse = 1 - pulse_ + pulse_ * (0.5f + 0.5f * std::sin(t * 1.25f));
-    const float bright = std::clamp(p.fl_bright * pulse * (1 + 0.3f * flare_k), 0.0f, 1.0f);
+    // Waking: the flame flares up as it grows back from the ember.
+    const float wake_k = wake_t_ >= 0 ? std::max(0.0f, 1 - (t - wake_t_) / kWakeS) : 0.0f;
+    const float bright = std::clamp(p.fl_bright * pulse * (1 + 0.3f * flare_k + 0.45f * wake_k), 0.0f, 1.0f);
     const float up = std::max(0.0f, -p.lag_y), dn = std::max(0.0f, p.lag_y);
     const float sx = size * (1 + squash_ * 0.35f * up);
     const float sy = size * breathe * (1 - squash_ * up) * (1 + squash_ * 0.25f * dn);
@@ -767,7 +783,11 @@ void WispFaceRenderer::draw_pose(FaceFrame& f, const Pose& p, bool clear) const 
   const int shut = eye_shut(look.eyes);
   for (int sgn : {-1, 1}) {
     const bool left = sgn < 0;
-    const int idx = p.blink_eye >= 0 && !(shut & (left ? 1 : 2)) ? p.blink_eye : look.eyes;
+    int idx = p.blink_eye >= 0 && !(shut & (left ? 1 : 2)) ? p.blink_eye : look.eyes;
+    // Waking: shut, then half open, then the state's own eyes.
+    const int n_eyes = static_cast<int>(eyes_l_.size());
+    if (wake_t_ >= 0 && p.t - wake_t_ < 0.45f && blink_closed_ < n_eyes && blink_half_ < n_eyes)
+      idx = p.t - wake_t_ < 0.18f ? blink_closed_ : blink_half_;
     const Entry& e = left ? eyes_l_[idx] : eyes_r_[idx];
     const float ax = left ? eye_lx_ : eye_rx_, ay = left ? eye_ly_ : eye_ry_;
     const float away = std::max(0.0f, sgn * p.gaze_x), toward = std::max(0.0f, -sgn * p.gaze_x);
