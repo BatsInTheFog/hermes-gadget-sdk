@@ -3455,7 +3455,7 @@ std::string App::console(std::string_view raw) {
     if (profile_.tailnet)
       for (const char* k : kTailnetKeys) keys += std::string(" ") + k;
     return "@help commands: status | diag [log] | get <key> | set <key> <value> | say <text> | talk | release | "
-           "cancel | new-session | camera [close] | rec [start | pause | resume | stop] | settings [close] | wifi-setup [close] | wifi [list | add <ssid> [password] | join <ssid> | "
+           "cancel | new-session | camera [close] | rec [start | pause | resume | stop | save | delete] | settings [close] | wifi-setup [close] | wifi [list | add <ssid> [password] | join <ssid> | "
            "forget <ssid>] | phone [pair [close] | forget] | perf [on | off | reset | budget <us> | bench [scroll | mascot | redraw | all]] | yes | no | reconnect | forget-key | factory-reset   keys:" + keys;
   }
   if (cmd == "status") return "@status " + status_json();
@@ -3512,17 +3512,22 @@ std::string App::console(std::string_view raw) {
       recorder_pause(rest == "pause");
       return rec_open_ ? "@ok" : "@error not recording";
     }
-    if (rest == "stop") {
+    if (rest == "stop") {  // as the Stop hold: asks Save or Delete
       if (!rec_open_) return "@error not recording";
       recorder_stop();
-      return "@ok saving";
+      return rec_phase_ == RecPhase::Choose ? "@ok save or delete?" : "@ok saving";
+    }
+    if (rest == "save" || rest == "delete") {
+      if (!rec_open_) return "@error not recording";
+      recorder_finish(rest == "save");
+      return rest == "save" ? "@ok saving" : "@ok deleting";
     }
     if (rest == "level reset") {
       rec_level_.reset();
       return "@ok";
     }
-    if (!rest.empty()) return "@error usage: rec [start | pause | resume | stop | level reset]";
-    static const char* const kPhases[] = {"recording", "paused", "saving", "done"};
+    if (!rest.empty()) return "@error usage: rec [start | pause | resume | stop | save | delete | level reset]";
+    static const char* const kPhases[] = {"recording", "paused", "choose", "saving", "done"};
     json::Value r = json::Value::object();
     r.set("available", recorder_available()).set("open", rec_open_);
     if (rec_open_) r.set("phase", kPhases[static_cast<int>(rec_phase_)]);

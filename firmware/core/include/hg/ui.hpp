@@ -82,15 +82,15 @@ std::string profile_initial(std::string_view name);
 // timer at the top, the mic art in the middle (frame 1..5 by level; frame 1 dimmed while
 // paused), Pause and hold-to-Stop at the bottom; or one message over the whole panel.
 struct RecorderView {
-  enum class Phase : uint8_t { Recording, Paused, Message };
+  enum class Phase : uint8_t { Recording, Paused, Choose, Message };
   Phase phase = Phase::Recording;
   const WispFace::Part* mic[5] = {};  // borrowed from the face file
   int mic_x = 0, mic_y = 0;           // the art's top-left corner on the panel
   uint8_t frame = 1;
   std::string time;                   // "mm:ss" or "h:mm:ss"
   bool time_on = true;                // Paused: false in the blink's dark half
-  int16_t stop_permille = 0;          // how far the Stop hold has filled its ring
-  std::string message, detail;        // Phase::Message
+  int16_t stop_permille = 0;          // how far the Stop (or Choose: DELETE) hold has filled
+  std::string message, detail;        // Phase::Message; Choose: the auto-save countdown line
   bool good = true;                   // the message in green (saved) or red (failed)
 };
 
@@ -289,6 +289,8 @@ class Ui {
   // The recorder's touch buttons, panel coordinates: 1 Pause/Resume, 2 Stop, 0 neither.
   // `slack` widens them (a finger already holding Stop may drift a little).
   int recorder_button_hit(int x, int y, int slack = 0) const;
+  // The Save or Delete choice after Stop: 1 SAVE, 2 DELETE, 0 neither.
+  int recorder_choice_hit(int x, int y, int slack = 0) const;
   bool title_hit(int x, int y) const {
     const int left = ox_ + (info_.width - layout_.title_w) / 2;
     return x >= left && x < left + layout_.title_w && y >= oy_ && y < oy_ + layout_.top_h;
@@ -372,6 +374,9 @@ class Ui {
   void draw_battery_face(const UiModel& m);  // LowBattery, Charging, Charged
   void draw_recorder(const UiModel& m);
   void draw_recorder_band(Canvas& c, const UiModel& m, int band);
+  void draw_choice(const UiModel& m);
+  void draw_choice_band(Canvas& c, const UiModel& m, int band);
+  int rec_drawn_ = 0;  // what the panel holds: 0 nothing of the recorder, 1 recording, 2 a message, 3 the choice
   // The recorder's mic art, composed here (native RGB565) and copied to the framebuffer;
   // freed when the recorder closes. The hashes of what each band last drew.
   std::vector<uint16_t> rec_px_;

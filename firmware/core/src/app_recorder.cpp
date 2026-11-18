@@ -89,14 +89,40 @@ void App::recorder_pause(bool on) {
 
 void App::recorder_stop() {
   if (!rec_open_ || (rec_phase_ != RecPhase::Recording && rec_phase_ != RecPhase::Paused)) return;
-  // Too short to keep (kRecordMinKeepS): deleted, never uploaded.
-  const bool keep = hal_.recorder->status().samples > static_cast<uint64_t>(kRecordMinKeepS) * kRecordRate;
+  // Too short to keep (kRecordMinKeepS): deleted, never uploaded, without asking.
+  if (hal_.recorder->status().samples <= static_cast<uint64_t>(kRecordMinKeepS) * kRecordRate) {
+    recorder_finish(false);
+    rec_deleting_ = false;  // not the user's choice: the message says "Not kept"
+    return;
+  }
+  // Save or Delete? The file stays open, paused: a crash meanwhile still keeps it.
+  hal_.recorder->pause(true);
+  hal_.mic->stop();
+  rec_phase_ = RecPhase::Choose;
+  rec_choose_until_ = now() + kRecChooseMs;
+  rec_stop_at_ = 0;
+  rec_pressed_ = 0;
+  rec_touch_at_ = now();
+  if (rec_dimmed_) {
+    rec_dimmed_ = false;
+    apply_backlight();
+  }
+  log(LogLevel::Info, "recorder: stopped; save or delete?");
+  update_model();
+}
+
+void App::recorder_finish(bool keep) {
+  if (!rec_open_ ||
+      (rec_phase_ != RecPhase::Recording && rec_phase_ != RecPhase::Paused && rec_phase_ != RecPhase::Choose))
+    return;
+  rec_deleting_ = !keep;
+  keep = keep && hal_.recorder->status().samples > static_cast<uint64_t>(kRecordMinKeepS) * kRecordRate;
   hal_.recorder->stop(!keep);
   hal_.mic->stop();
   rec_phase_ = RecPhase::Saving;
   rec_stop_at_ = 0;
   rec_pressed_ = 0;
-  rec_message_ = "Saving...";
+  rec_message_ = keep ? "Saving..." : "Deleting...";
   rec_detail_.clear();
   rec_good_ = true;
   if (rec_dimmed_) {
@@ -117,9 +143,9 @@ void App::recorder_message(std::string message, std::string detail, bool good, u
 
 void App::close_recorder() {
   if (!rec_open_) return;
-  if (rec_phase_ == RecPhase::Recording || rec_phase_ == RecPhase::Paused) {
+  if (rec_phase_ == RecPhase::Recording || rec_phase_ == RecPhase::Paused || rec_phase_ == RecPhase::Choose) {
     // Never left unsaved: a close while recording finishes the file first (it shows "Saving").
-    recorder_stop();
+    recorder_finish(true);
     return;
   }
   rec_open_ = false;
@@ -154,7 +180,7 @@ void App::recorder_tick() {
       if (percent && *percent <= kRecLowBattery && power_status_ && power_status_->external_power == false &&
           !battery_is_estimated()) {
         log(LogLevel::Warn, "recorder: battery at " + std::to_string(*percent) + "%, stopping");
-        recorder_stop();
+        recorder_finish(true);  // no time to ask
         return;
       }
       if (!rec_dimmed_ && t - rec_touch_at_ >= kRecDimMs) {
@@ -173,10 +199,37 @@ void App::recorder_tick() {
       }
       break;
     }
+    case RecPhase::Choose: {
+      if (st.state == AudioRecorder::State::Failed) {
+        log(LogLevel::Error, "recorder: " + st.error);
+        recorder_message("Not saved", st.error, false, 5000);
+        return;
+      }
+      if (rec_stop_at_ && t - rec_stop_at_ >= kRecStopHoldMs) {
+        log(LogLevel::Info, "recorder: deleted by choice");
+        recorder_finish(false);
+        return;
+      }
+      const auto percent = display_battery_percent();
+      if (static_cast<int32_t>(t - rec_choose_until_) >= 0 ||
+          (percent && *percent <= kRecLowBattery && power_status_ && power_status_->external_power == false &&
+           !battery_is_estimated())) {
+        log(LogLevel::Info, "recorder: no choice made, saving");
+        recorder_finish(true);
+        return;
+      }
+      const uint32_t sig = ((rec_choose_until_ - t) / 1000) * 1024 + (rec_stop_at_ ? 1 + (t - rec_stop_at_) / 40 : 0);
+      if (sig != rec_sig_) {
+        rec_sig_ = sig;
+        update_model();
+      }
+      break;
+    }
     case RecPhase::Saving:
       if (st.state == AudioRecorder::State::Saved && st.discarded) {
-        log(LogLevel::Info, "recorder: " + std::to_string(st.samples / kRecordRate) + " s, too short: deleted");
-        recorder_message("Not kept", std::to_string(kRecordMinKeepS) + " seconds or less", true, kRecSavedMs);
+        log(LogLevel::Info, "recorder: " + std::to_string(st.samples / kRecordRate) + " s, deleted");
+        if (rec_deleting_) recorder_message("Deleted", std::string(), false, kRecSavedMs);
+        else recorder_message("Not kept", std::to_string(kRecordMinKeepS) + " seconds or less", true, kRecSavedMs);
       } else if (st.state == AudioRecorder::State::Saved) {
         const size_t slash = st.file.rfind('/');
         log(LogLevel::Info, "recorder: saved " + st.file + " (" + std::to_string(st.samples / kRecordRate) + " s" +
@@ -211,6 +264,15 @@ void App::recorder_model(UiModel& m) {
     return;
   }
   const uint32_t t = now();
+  if (rec_phase_ == RecPhase::Choose) {
+    r.phase = RecorderView::Phase::Choose;
+    r.time = recording_elapsed(static_cast<uint32_t>(hal_.recorder->status().samples / kRecordRate));
+    const uint32_t left = static_cast<int32_t>(rec_choose_until_ - t) > 0 ? (rec_choose_until_ - t + 999) / 1000 : 0;
+    r.detail = "Saves by itself in " + std::to_string(left) + " s";
+    r.stop_permille = rec_stop_at_ ? static_cast<int16_t>(std::min<uint32_t>(1000, (t - rec_stop_at_) * 1000 / kRecStopHoldMs))
+                                   : int16_t(0);
+    return;
+  }
   const bool paused = rec_phase_ == RecPhase::Paused;
   r.phase = paused ? RecorderView::Phase::Paused : RecorderView::Phase::Recording;
   r.time = recording_elapsed(static_cast<uint32_t>(hal_.recorder->status().samples / kRecordRate));
@@ -237,6 +299,14 @@ void App::recorder_press(int x, int y) {
     return;
   }
   if (rec_phase_ == RecPhase::Saving) return;
+  if (rec_phase_ == RecPhase::Choose) {  // SAVE acts on the lift; DELETE is held
+    rec_pressed_ = ui_ ? ui_->recorder_choice_hit(x, y) : 0;
+    if (rec_pressed_ == 2) {
+      rec_stop_at_ = now() ? now() : 1;
+      update_model();
+    }
+    return;
+  }
   rec_pressed_ = ui_ ? ui_->recorder_button_hit(x, y) : 0;
   if (rec_pressed_ == 2) {
     rec_stop_at_ = now() ? now() : 1;
@@ -246,7 +316,8 @@ void App::recorder_press(int x, int y) {
 
 void App::recorder_move(int x, int y) {
   if (!rec_open_ || !rec_pressed_ || !ui_) return;
-  if (ui_->recorder_button_hit(x, y, 16) == rec_pressed_) return;
+  const int hit = rec_phase_ == RecPhase::Choose ? ui_->recorder_choice_hit(x, y, 16) : ui_->recorder_button_hit(x, y, 16);
+  if (hit == rec_pressed_) return;
   // Slid off the button: neither the tap nor the hold counts.
   if (rec_pressed_ == 2 && rec_stop_at_) {
     rec_stop_at_ = 0;
@@ -261,6 +332,14 @@ void App::recorder_lift() {
   rec_pressed_ = 0;
   if (rec_swallow_) {
     rec_swallow_ = false;
+    return;
+  }
+  if (rec_phase_ == RecPhase::Choose) {
+    if (pressed == 1) recorder_finish(true);
+    if (pressed == 2 && rec_stop_at_) {  // let go too soon: nothing is deleted
+      rec_stop_at_ = 0;
+      update_model();
+    }
     return;
   }
   if (pressed == 1) recorder_pause(rec_phase_ == RecPhase::Recording);

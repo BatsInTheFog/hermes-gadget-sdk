@@ -225,7 +225,10 @@ class App {
   bool open_recorder();
   bool recorder_open() const { return rec_open_; }
   void recorder_pause(bool on);
+  // The Stop hold: asks Save or Delete (6 s or less is deleted without asking).
   void recorder_stop();
+  // Ends the recording: keeps it (still not when too short) or deletes it.
+  void recorder_finish(bool keep);
   // Touch: on the recorder screen every touch goes here (TouchGestures State::Recorder).
   bool recorder_touch_live() const { return rec_open_; }
   void recorder_press(int x, int y);
@@ -234,6 +237,7 @@ class App {
   static constexpr uint32_t kRecStopHoldMs = 1000;  // Stop is a one-second hold
   static constexpr uint32_t kRecDimMs = 30000;      // untouched this long, the screen dims
   static constexpr uint32_t kRecSavedMs = 2000;     // "Saved" shows this long
+  static constexpr uint32_t kRecChooseMs = 60000;   // no choice made after Stop: it is saved
   static constexpr uint8_t kRecLowBattery = 5;      // at or under this (on battery): stop and save
   // Hermes profiles: which one answers this device. Switching asks the server; the
   // device keeps a profile only once Hermes confirms it, and asks again only after an answer.
@@ -970,7 +974,7 @@ class App {
   WispFace wisp_face_;
   WispFaceRenderer wisp_renderer_;
   // The voice recorder (app_recorder.cpp).
-  enum class RecPhase : uint8_t { Recording, Paused, Saving, Done };
+  enum class RecPhase : uint8_t { Recording, Paused, Choose, Saving, Done };
   void recorder_art();  // finds the mic art in the face file (before its metadata is dropped)
   void recorder_tick();
   void recorder_model(UiModel& m);
@@ -987,6 +991,8 @@ class App {
   int rec_pressed_ = 0;           // the button the finger came down on (1 Pause, 2 Stop)
   uint32_t rec_stop_at_ = 0;      // when the Stop hold began
   uint32_t rec_done_until_ = 0;   // Done: when the message gives way to the face
+  uint32_t rec_choose_until_ = 0; // Choose: when it saves by itself
+  bool rec_deleting_ = false;     // the user chose DELETE (the message says so)
   uint32_t rec_sig_ = 0;          // what the screen showed at the last model (redraw on change)
   std::string rec_message_, rec_detail_;
   bool rec_good_ = true;

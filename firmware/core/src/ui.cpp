@@ -2512,16 +2512,103 @@ void Ui::draw_recorder_band(Canvas& c, const UiModel& m, int band) {
   }
 }
 
+// The Save or Delete choice after Stop: SAVE large in Wisp's teal over the top half (a tap),
+// DELETE smaller in red below it (a one-second hold that fills the button from the left), the
+// recorded length above and the auto-save countdown between them.
+namespace {
+constexpr uint16_t kRecTeal = rgb565(64, 224, 192);
+constexpr uint16_t kRecTealDim = rgb565(8, 46, 40);
+constexpr uint16_t kRecDeleteDim = rgb565(96, 24, 24);
+constexpr uint16_t kRecDeleteFill = rgb565(214, 52, 52);
+
+struct ChoiceGeom {
+  int save_x, save_y, save_w, save_h;
+  int del_x, del_y, del_w, del_h;
+  int split;  // the first row of the DELETE band
+};
+
+ChoiceGeom choice_geom(int W, int H) {
+  ChoiceGeom g{};
+  g.save_x = 24, g.save_y = H * 13 / 100, g.save_w = W - 48, g.save_h = H * 40 / 100;
+  g.del_w = W * 60 / 100, g.del_h = H * 20 / 100;
+  g.del_x = (W - g.del_w) / 2, g.del_y = H * 66 / 100;
+  g.split = g.del_y - 12;
+  return g;
+}
+}  // namespace
+
+int Ui::recorder_choice_hit(int x, int y, int slack) const {
+  const ChoiceGeom g = choice_geom(panel_.width, panel_.height);
+  auto in = [&](int rx, int ry, int rw, int rh) {
+    return x >= rx - slack && x < rx + rw + slack && y >= ry - slack && y < ry + rh + slack;
+  };
+  return in(g.save_x, g.save_y, g.save_w, g.save_h) ? 1 : in(g.del_x, g.del_y, g.del_w, g.del_h) ? 2 : 0;
+}
+
+void Ui::draw_choice_band(Canvas& c, const UiModel& m, int band) {
+  const RecorderView& r = m.rec;
+  const int W = panel_.width, H = panel_.height;
+  const ChoiceGeom g = choice_geom(W, H);
+  if (band == 0) {
+    c.fill_rect(0, 0, W, g.split, 0);
+    const std::string len = r.time + " recorded";
+    c.text((W - Canvas::text_width(len, 2)) / 2, g.save_y - Canvas::line_height(2) - 14, len, 2, kDim);
+    c.fill_round_rect(g.save_x, g.save_y, g.save_w, g.save_h, 22, kRecTeal);
+    c.fill_round_rect(g.save_x + 4, g.save_y + 4, g.save_w - 8, g.save_h - 8, 18, kRecTealDim);
+    int s = 14;
+    while (s > 2 && (Canvas::text_width("SAVE", s) > g.save_w - 40 || Canvas::line_height(s) > g.save_h - 40)) --s;
+    c.text((W - Canvas::text_width("SAVE", s)) / 2, g.save_y + (g.save_h - Canvas::line_height(s)) / 2, "SAVE", s,
+           kRecTeal);
+    c.text((W - Canvas::text_width(r.detail, 2)) / 2, g.save_y + g.save_h + 14, r.detail, 2, kDim);
+  } else {
+    c.fill_rect(0, g.split, W, H - g.split, 0);
+    c.fill_round_rect(g.del_x, g.del_y, g.del_w, g.del_h, 16, kRecDeleteDim);
+    const int fill = g.del_w * std::clamp<int>(r.stop_permille, 0, 1000) / 1000;
+    if (fill > 0) {
+      // The hold fills the button from the left, inside its rounded corners.
+      Canvas part = c;
+      part.set_clip_rows(g.del_y, g.del_y + g.del_h);
+      part.fill_round_rect(g.del_x, g.del_y, std::max(fill, 32), g.del_h, 16, kRecDeleteFill);
+    }
+    int s = 6;
+    while (s > 2 && Canvas::text_width("DELETE", s) > g.del_w - 32) --s;
+    c.text((W - Canvas::text_width("DELETE", s)) / 2, g.del_y + (g.del_h - Canvas::line_height(s)) / 2, "DELETE", s,
+           kText);
+    const char* hint = "hold to delete";
+    c.text((W - Canvas::text_width(hint, 2)) / 2, g.del_y + g.del_h + 10, hint, 2, kDim);
+  }
+}
+
+void Ui::draw_choice(const UiModel& m) {
+  const RecorderView& r = m.rec;
+  const int H = panel_.height;
+  const ChoiceGeom g = choice_geom(panel_.width, H);
+  const uint32_t keys[2] = {Hash().val(5).add(r.time).add(r.detail).get(),
+                            Hash().val(6).val(r.stop_permille).get()};
+  const bool all = rec_drawn_ != 3;
+  rec_drawn_ = 3;
+  const int bands[3] = {0, g.split, H};
+  for (int b = 0; b < 2; ++b) {
+    if (!all && rec_hash_[b] == keys[b]) continue;
+    rec_hash_[b] = keys[b];
+    each_window(bands[b], bands[b + 1], [&](int, int) {
+      Canvas c = panel_canvas();
+      c.set_clip_rows(bands[b], bands[b + 1]);
+      draw_choice_band(c, m, b);
+    });
+  }
+}
+
 void Ui::draw_recorder(const UiModel& m) {
   const RecorderView& r = m.rec;
-  const bool fresh = !valid_ || full_face_ != FullFace::Recorder;
+  if (!valid_ || full_face_ != FullFace::Recorder) rec_drawn_ = 0;  // from another screen: all of it
   full_face_ = FullFace::Recorder;
   valid_ = true;  // leaving it repaints everything anyway (draw_frame)
   const int W = panel_.width, H = panel_.height;
   if (r.phase == RecorderView::Phase::Message) {
     const uint32_t key = Hash().val(1).add(r.message).add(r.detail).val(r.good).get();
-    if (!fresh && rec_hash_[3] == key) return;
-    rec_hash_[0] = rec_hash_[1] = rec_hash_[2] = 0;
+    if (rec_drawn_ == 2 && rec_hash_[3] == key) return;
+    rec_drawn_ = 2;
     rec_hash_[3] = key;
     each_window(0, H, [&](int, int) {
       Canvas c = panel_canvas();
@@ -2537,6 +2624,10 @@ void Ui::draw_recorder(const UiModel& m) {
     });
     return;
   }
+  if (r.phase == RecorderView::Phase::Choose) {
+    draw_choice(m);
+    return;
+  }
   const bool paused = r.phase == RecorderView::Phase::Paused;
   const uint32_t keys[3] = {
       Hash().val(2).val(paused).add(r.time).val(r.time_on).get(),
@@ -2544,8 +2635,8 @@ void Ui::draw_recorder(const UiModel& m) {
       Hash().val(4).val(paused).val(r.stop_permille).get(),
   };
   const int bands[4] = {0, kRecTopH, rec_mic_bottom(H), H};
-  if (fresh || rec_hash_[3]) {  // from another screen or a message: all of it
-    rec_hash_[3] = 0;
+  if (rec_drawn_ != 1) {
+    rec_drawn_ = 1;
     each_window(0, H, [&](int, int) {
       Canvas c = panel_canvas();
       for (int b = 0; b < 3; ++b) draw_recorder_band(c, m, b);

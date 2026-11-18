@@ -10213,8 +10213,16 @@ struct RecRig {
     touch.update(false, 0, 0, r.fake.clock);
     r.advance(10);
   }
-  // The buttons' centres on the 368x448 panel.
+  // The buttons' centres on the 368x448 panel; the choice's SAVE and DELETE.
   static constexpr int kPauseX = 184 - 70, kStopX = 184 + 70, kButtonY = 448 - 34 - 7;
+  static constexpr int kSaveY = 147, kDeleteY = 340;
+  // Records `secs`, then holds Stop: the Save or Delete choice.
+  void record_and_stop(uint32_t secs) {
+    press_talk_three_times();
+    rec.st.samples = 16000 * secs;
+    r.advance(20);
+    tap(kStopX, kButtonY, 1050);
+  }
 };
 
 }  // namespace
@@ -10281,7 +10289,8 @@ TEST("recorder: 6 seconds or less is deleted, not saved") {
   x.press_talk_three_times();
   x.rec.st.samples = 16000 * 6 + 16;
   x.r.advance(20);
-  CHECK(x.r.app.console("rec stop") == "@ok saving");
+  CHECK(x.r.app.console("rec stop") == "@ok save or delete?");
+  CHECK(x.r.app.console("rec save") == "@ok saving");
   CHECK(!x.rec.discard);
 }
 
@@ -10312,10 +10321,17 @@ TEST("recorder: the timer, Pause on a tap, Stop on a one-second hold, Saved, the
   CHECK(x.r.app.model().rec.stop_permille >= 450 && x.r.app.model().rec.stop_permille <= 550);
   CHECK(x.rec.st.state == hg::AudioRecorder::State::Recording);
   x.r.advance(520);
-  CHECK(x.rec.st.state == hg::AudioRecorder::State::Finishing);
+  // Save or Delete? The file waits, paused; the mic is off.
+  CHECK(x.r.app.model().rec.phase == hg::RecorderView::Phase::Choose);
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Paused);
   CHECK(!x.r.fake.mic_on);
-  CHECK(x.r.app.model().rec.phase == hg::RecorderView::Phase::Message);
   x.touch.update(false, 0, 0, x.r.fake.clock);
+  x.r.advance(20);
+  CHECK(x.r.app.model().rec.phase == hg::RecorderView::Phase::Choose);
+  x.tap(184, RecRig::kSaveY);  // SAVE: a tap
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Finishing);
+  CHECK(!x.rec.discard);
+  CHECK(x.r.app.model().rec.phase == hg::RecorderView::Phase::Message);
   x.rec.st.state = hg::AudioRecorder::State::Saved;
   x.r.advance(20);
   CHECK_EQ(x.r.app.model().rec.message, std::string("Saved"));
@@ -10404,11 +10420,59 @@ TEST("recorder: a failed card shows Not saved and goes back to the face") {
 TEST("recorder: the rec console command reports and drives it") {
   RecRig x;
   CHECK(x.r.app.console("rec").find("\"available\":true") != std::string::npos);
-  x.rec.st.samples = 16000 * 30;
   CHECK_EQ(x.r.app.console("rec start"), std::string("@ok recording"));
+  x.rec.st.samples = 16000 * 30;
   CHECK(x.r.app.screen() == hg::Screen::Recorder);
   CHECK_EQ(x.r.app.console("rec pause"), std::string("@ok"));
   CHECK(x.rec.st.state == hg::AudioRecorder::State::Paused);
-  CHECK_EQ(x.r.app.console("rec stop"), std::string("@ok saving"));
+  CHECK_EQ(x.r.app.console("rec stop"), std::string("@ok save or delete?"));
+  CHECK(x.r.app.console("rec").find("\"phase\":\"choose\"") != std::string::npos);
+  CHECK_EQ(x.r.app.console("rec save"), std::string("@ok saving"));
   CHECK(x.r.app.console("rec").find("\"phase\":\"saving\"") != std::string::npos);
+}
+
+TEST("recorder choice: DELETE is a one-second hold; a short touch deletes nothing") {
+  RecRig x;
+  x.record_and_stop(120);
+  CHECK(x.r.app.model().rec.phase == hg::RecorderView::Phase::Choose);
+  CHECK_EQ(x.r.app.model().rec.time, std::string("02:00"));
+  x.tap(184, RecRig::kDeleteY, 400);  // too short
+  CHECK(x.r.app.model().rec.phase == hg::RecorderView::Phase::Choose);
+  CHECK_EQ(x.r.app.model().rec.stop_permille, 0);
+  x.touch.update(true, 184, RecRig::kDeleteY, x.r.fake.clock);
+  x.r.advance(500);
+  CHECK(x.r.app.model().rec.stop_permille >= 450 && x.r.app.model().rec.stop_permille <= 550);
+  x.r.advance(520);
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Finishing);
+  CHECK(x.rec.discard);
+  x.touch.update(false, 0, 0, x.r.fake.clock);
+  x.rec.st.state = hg::AudioRecorder::State::Saved;
+  x.rec.st.discarded = true;
+  x.r.advance(20);
+  CHECK_EQ(x.r.app.model().rec.message, std::string("Deleted"));
+  x.r.advance(hg::App::kRecSavedMs + 50);
+  CHECK(!x.r.app.recorder_open());
+}
+
+TEST("recorder choice: no choice in a minute saves it; the keys don't choose") {
+  RecRig x;
+  x.record_and_stop(30);
+  CHECK(x.r.app.model().rec.detail.find("60 s") != std::string::npos);
+  x.r.app.on_button(hg::Button::Talk, true);
+  x.r.app.on_button(hg::Button::Talk, false);
+  x.r.app.on_button(hg::Button::Cancel, true);
+  x.r.app.on_button(hg::Button::Cancel, false);
+  x.r.advance(30000);
+  CHECK(x.r.app.model().rec.phase == hg::RecorderView::Phase::Choose);
+  CHECK(x.r.app.model().rec.detail.find("30 s") != std::string::npos);
+  x.r.advance(30100);
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Finishing);
+  CHECK(!x.rec.discard);
+}
+
+TEST("recorder choice: 6 seconds or less skips the question") {
+  RecRig x;
+  x.record_and_stop(5);
+  CHECK(x.rec.st.state == hg::AudioRecorder::State::Finishing);
+  CHECK(x.rec.discard);
 }
