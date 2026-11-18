@@ -147,6 +147,83 @@ void wav_header(uint8_t out[44], uint32_t data_bytes, uint32_t rate) {
   u32(40, data_bytes);
 }
 
+namespace {
+bool starts_with(std::string_view s, std::string_view p) { return s.size() >= p.size() && s.substr(0, p.size()) == p; }
+bool ends_with(std::string_view s, std::string_view p) {
+  return s.size() >= p.size() && s.substr(s.size() - p.size()) == p;
+}
+}  // namespace
+
+int64_t civil_seconds(const WallTime& w) {
+  // Days from 1970-01-01 (Howard Hinnant's days_from_civil).
+  const int y = static_cast<int>(w.year) - (w.month <= 2 ? 1 : 0);
+  const int era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = static_cast<unsigned>(y - era * 400);
+  const unsigned mp = (w.month + 9) % 12;
+  const unsigned doy = (153 * mp + 2) / 5 + w.day - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  const int64_t days = static_cast<int64_t>(era) * 146097 + static_cast<int64_t>(doe) - 719468;
+  return days * 86400 + w.hour * 3600 + w.minute * 60 + w.second;
+}
+
+bool recording_time(std::string_view name, int64_t& out) {
+  // wisp_YYYYMMDD_HHMMSS...
+  if (!starts_with(name, "wisp_") || name.size() < 20 || name[13] != '_') return false;
+  for (size_t i : {5u, 6u, 7u, 8u, 9u, 10u, 11u, 12u, 14u, 15u, 16u, 17u, 18u, 19u})
+    if (name[i] < '0' || name[i] > '9') return false;
+  auto num = [&](size_t at, size_t n) {
+    int v = 0;
+    for (size_t i = 0; i < n; ++i) v = v * 10 + (name[at + i] - '0');
+    return v;
+  };
+  WallTime w;
+  w.year = static_cast<uint16_t>(num(5, 4));
+  w.month = static_cast<uint8_t>(num(9, 2));
+  w.day = static_cast<uint8_t>(num(11, 2));
+  w.hour = static_cast<uint8_t>(num(14, 2));
+  w.minute = static_cast<uint8_t>(num(16, 2));
+  w.second = static_cast<uint8_t>(num(18, 2));
+  if (w.month < 1 || w.month > 12 || w.day < 1 || w.day > 31 || w.hour > 23 || w.minute > 59 || w.second > 60)
+    return false;
+  out = civil_seconds(w);
+  return true;
+}
+
+std::vector<std::string> upload_order(std::vector<std::string> names) {
+  std::vector<std::string> out;
+  for (auto& n : names)
+    if (starts_with(n, "wisp_") && ends_with(n, ".wav")) out.push_back(std::move(n));
+  std::sort(out.begin(), out.end(), [](const std::string& a, const std::string& b) {
+    int64_t ta = 0, tb = 0;
+    const bool da = recording_time(a, ta), db = recording_time(b, tb);
+    if (da != db) return da;  // dated ones first
+    if (da && ta != tb) return ta < tb;
+    return a < b;
+  });
+  return out;
+}
+
+std::vector<std::string> sent_cleanup(std::vector<SentFile> sent, int64_t now, uint64_t free_bytes) {
+  std::sort(sent.begin(), sent.end(), [](const SentFile& a, const SentFile& b) {
+    return a.time != b.time ? a.time < b.time : a.name < b.name;
+  });
+  std::vector<std::string> out;
+  const int64_t keep_from = now - static_cast<int64_t>(kSentKeepDays) * 86400;
+  for (const SentFile& f : sent) {
+    if (f.time < keep_from || free_bytes < kMinFreeBytes) {
+      out.push_back(f.name);
+      free_bytes += f.size;
+    }
+  }
+  return out;
+}
+
+uint32_t upload_backoff_ms(uint32_t failures) {
+  if (failures == 0) return 0;
+  uint64_t ms = 30000ull << std::min<uint32_t>(failures - 1, 10);
+  return static_cast<uint32_t>(std::min<uint64_t>(ms, 30ull * 60 * 1000));
+}
+
 uint32_t wav_data_in_file(uint64_t file_size) {
   if (file_size <= 44) return 0;
   const uint64_t data = (file_size - 44) & ~uint64_t{1};  // whole 16-bit samples

@@ -238,6 +238,9 @@ class App {
   static constexpr uint32_t kRecDimMs = 30000;      // untouched this long, the screen dims
   static constexpr uint32_t kRecSavedMs = 2000;     // "Saved" shows this long
   static constexpr uint32_t kRecChooseMs = 60000;   // no choice made after Stop: it is saved
+  static constexpr uint32_t kRecUploadShowMs = 30000;  // "Uploading..." holds the screen at most this long
+  // Recordings waiting or uploading, for the face's caption: "" when there are none.
+  std::string upload_line() const;
   static constexpr uint8_t kRecLowBattery = 5;      // at or under this (on battery): stop and save
   // Hermes profiles: which one answers this device. Switching asks the server; the
   // device keeps a profile only once Hermes confirms it, and asks again only after an answer.
@@ -974,7 +977,7 @@ class App {
   WispFace wisp_face_;
   WispFaceRenderer wisp_renderer_;
   // The voice recorder (app_recorder.cpp).
-  enum class RecPhase : uint8_t { Recording, Paused, Choose, Saving, Done };
+  enum class RecPhase : uint8_t { Recording, Paused, Choose, Saving, Done, Upload };
   void recorder_art();  // finds the mic art in the face file (before its metadata is dropped)
   void recorder_tick();
   void recorder_model(UiModel& m);
@@ -993,6 +996,13 @@ class App {
   uint32_t rec_done_until_ = 0;   // Done: when the message gives way to the face
   uint32_t rec_choose_until_ = 0; // Choose: when it saves by itself
   bool rec_deleting_ = false;     // the user chose DELETE (the message says so)
+  bool rec_then_upload_ = false;  // Done: the "Saved" message, with the upload step after it
+  std::string rec_saved_name_;    // the file just saved (name only)
+  uint32_t rec_upload_sent_ = 0, rec_upload_fail_ = 0, rec_upload_until_ = 0;
+  bool recording_now() const;     // the mic and the card are in use (uploads wait)
+  void recorder_upload_tick(uint32_t t);
+  std::string upload_cert_;       // `upload cert` lines being collected
+  uint32_t upload_sig_ = 0, upload_seen_at_ = 0;
   uint32_t rec_sig_ = 0;          // what the screen showed at the last model (redraw on change)
   std::string rec_message_, rec_detail_;
   bool rec_good_ = true;

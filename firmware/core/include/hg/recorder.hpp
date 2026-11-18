@@ -86,6 +86,59 @@ bool recording_worth_keeping(uint64_t data_bytes);
 std::string recording_final_name(std::string_view part_name);
 constexpr const char* kPartSuffix = ".part";
 
+// ---------------------------------------------------------------------------
+// Uploads (Phase 3). Finished recordings go to a Nextcloud File drop share, oldest first, by
+// WebDAV PUT, only while Wi-Fi is up and nothing records. A sent one moves to sent/; sent ones
+// are deleted after kSentKeepDays, or the oldest first while the card has under kMinFreeBytes
+// free. A recording that hasn't been sent is never deleted.
+constexpr uint32_t kSentKeepDays = 14;
+constexpr uint64_t kMinFreeBytes = 2ull * 1024 * 1024 * 1024;
+constexpr const char* kSentDir = "sent";
+
+// The recordings to send, oldest first: finished ones only ("wisp_*.wav", not ".part"). Named
+// ones sort by their start time; unsynced ones come after them, in their own order.
+std::vector<std::string> upload_order(std::vector<std::string> names);
+// The local start time a recording's name holds, as seconds since 1970-01-01 00:00 (local, no
+// timezone applied); false for names without one (wisp_unsynced_*).
+bool recording_time(std::string_view name, int64_t& out);
+// Seconds since 1970-01-01 00:00 for a calendar time (no timezone applied).
+int64_t civil_seconds(const WallTime& w);
+struct SentFile {
+  std::string name;
+  uint64_t size = 0;
+  int64_t time = 0;  // civil_seconds of when it was recorded
+};
+// The sent recordings to delete: every one older than kSentKeepDays at `now` (civil seconds),
+// then the oldest while the card's free space (`free_bytes`, counting what is deleted) is under
+// kMinFreeBytes.
+std::vector<std::string> sent_cleanup(std::vector<SentFile> sent, int64_t now, uint64_t free_bytes);
+// How long to wait after `failures` failed uploads in a row: 30 s, doubling, at most 30 min.
+uint32_t upload_backoff_ms(uint32_t failures);
+
+// The port's uploader (Wisp: port_upload.cpp): a task that sends finished recordings.
+class RecordingUploader {
+ public:
+  struct Status {
+    bool configured = false;  // upload_url and upload_cert are set
+    uint32_t waiting = 0;     // finished recordings not sent yet (as of the last look)
+    bool uploading = false;
+    std::string current;      // the file being sent (name only)
+    uint8_t percent = 0;
+    uint32_t sent = 0;        // sent since start-up
+    std::string last_sent;    // the last file sent (name only)
+    uint32_t failures = 0;    // in a row
+    std::string last_error;   // the last failure's reason ("" after a success)
+    uint32_t retry_in_s = 0;  // waiting this long before the next try
+  };
+  virtual ~RecordingUploader() = default;
+  // Whether it may run now: Wi-Fi up and nothing recording. Going false stops an upload under
+  // way (it starts over later, with no penalty).
+  virtual void set_allowed(bool on) = 0;
+  // Look for something to send now, without waiting out a retry delay.
+  virtual void kick() = 0;
+  virtual Status status() = 0;
+};
+
 // The port's recorder: a microSD card, a ring buffer the mic task fills, and a writer task.
 class AudioRecorder {
  public:

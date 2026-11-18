@@ -10175,6 +10175,15 @@ std::vector<uint8_t> recorder_file() {
                               meta);
 }
 
+struct FakeUploader final : hg::RecordingUploader {
+  Status st;
+  bool allowed = false;
+  int kicks = 0;
+  void set_allowed(bool on) override { allowed = on; }
+  void kick() override { ++kicks; }
+  Status status() override { return st; }
+};
+
 struct RecRig {
   std::vector<uint8_t> file = recorder_file();
   FakeRecorder rec;
@@ -10475,4 +10484,127 @@ TEST("recorder choice: 6 seconds or less skips the question") {
   x.record_and_stop(5);
   CHECK(x.rec.st.state == hg::AudioRecorder::State::Finishing);
   CHECK(x.rec.discard);
+}
+
+
+// ---------------------------------------------------------------------------
+// Uploads (Phase 3): after "Saved", "Uploading..." then "Sent"; the face's waiting line.
+
+namespace {
+struct UpRig : RecRig {
+  FakeUploader up;
+  UpRig() {
+    up.st.configured = true;
+    r.hal.uploads = &up;
+    r.advance(20);
+  }
+  // Records 30 s, stops, taps SAVE and lets the card finish.
+  void record_and_save() {
+    record_and_stop(30);
+    tap(184, kSaveY);
+    rec.st.state = hg::AudioRecorder::State::Saved;
+    r.advance(20);
+  }
+};
+}  // namespace
+
+TEST("uploads: only while online and not recording") {
+  UpRig x;
+  CHECK(x.up.allowed);
+  x.press_talk_three_times();
+  x.r.advance(20);
+  CHECK(!x.up.allowed);
+  x.tap(RecRig::kStopX, RecRig::kButtonY, 1050);  // the choice: still not
+  CHECK(!x.up.allowed);
+  x.r.app.on_network(false, "");
+  x.r.advance(20);
+  CHECK(!x.up.allowed);
+}
+
+TEST("uploads: Saved, then Uploading with its percent, then Sent, then the face") {
+  UpRig x;
+  x.record_and_save();
+  CHECK_EQ(x.r.app.model().rec.message, std::string("Saved"));
+  const int kicks = x.up.kicks;
+  x.r.advance(hg::App::kRecSavedMs + 20);
+  CHECK_EQ(x.r.app.model().rec.message, std::string("Uploading..."));
+  CHECK(x.up.kicks > kicks);
+  CHECK(x.up.allowed);  // the file is finished: the upload may run behind this screen
+  x.up.st.uploading = true;
+  x.up.st.current = "wisp_20261117_140309.wav";
+  x.up.st.percent = 42;
+  x.r.advance(30);
+  CHECK_EQ(x.r.app.model().rec.detail, std::string("42%"));
+  x.up.st.uploading = false;
+  x.up.st.sent = 1;
+  x.up.st.last_sent = "wisp_20261117_140309.wav";
+  x.r.advance(30);
+  CHECK_EQ(x.r.app.model().rec.message, std::string("Sent"));
+  x.r.advance(hg::App::kRecSavedMs + 50);
+  CHECK(!x.r.app.recorder_open());
+}
+
+TEST("uploads: offline says it will upload later; a failure too; a long one goes on behind the face") {
+  {
+    UpRig x;
+    x.record_and_save();
+    x.r.app.on_network(false, "");
+    x.r.advance(hg::App::kRecSavedMs + 20);
+    CHECK_EQ(x.r.app.model().rec.detail, std::string("Will upload when online"));
+    x.r.advance(3100);
+    CHECK(!x.r.app.recorder_open());
+  }
+  {
+    UpRig x;
+    x.record_and_save();
+    x.r.advance(hg::App::kRecSavedMs + 20);
+    x.up.st.failures = 1;
+    x.up.st.last_error = "HTTP 503";
+    x.r.advance(30);
+    CHECK_EQ(x.r.app.model().rec.detail, std::string("Will upload later"));
+  }
+  {
+    UpRig x;
+    x.record_and_save();
+    x.r.advance(hg::App::kRecSavedMs + 20);
+    x.up.st.uploading = true;
+    x.up.st.current = "wisp_20261117_140309.wav";
+    x.r.advance(hg::App::kRecUploadShowMs + 100);
+    CHECK(!x.r.app.recorder_open());
+    CHECK(x.up.allowed);
+  }
+}
+
+TEST("uploads: the face says how many wait, or how far the upload is") {
+  UpRig x;
+  CHECK_EQ(x.r.app.upload_line(), std::string());
+  x.up.st.waiting = 2;
+  x.r.advance(600);
+  CHECK_EQ(x.r.app.model().detail, std::string("2 recordings waiting"));
+  x.up.st.waiting = 1;
+  x.r.advance(600);
+  CHECK_EQ(x.r.app.model().detail, std::string("1 recording waiting"));
+  x.up.st.uploading = true;
+  x.up.st.percent = 7;
+  x.r.advance(600);
+  CHECK_EQ(x.r.app.model().detail, std::string("Uploading recording 7%"));
+}
+
+TEST("uploads: the console keeps the address secret and takes the certificate in lines") {
+  UpRig x;
+  CHECK(x.r.app.console("set upload_url http://x/").rfind("@error", 0) == 0);
+  CHECK(x.r.app.console("set upload_url https://nas:9001/public.php/dav/files/TOKEN").rfind("@error", 0) == 0);
+  CHECK_EQ(x.r.app.console("set upload_url https://nas:9001/public.php/dav/files/TOKEN/"), std::string("@ok upload_url"));
+  CHECK(x.r.app.console("get upload_url").find("TOKEN") == std::string::npos);
+  CHECK(x.r.app.console("upload cert add AAAA").rfind("@error", 0) == 0);  // begin first
+  CHECK_EQ(x.r.app.console("upload cert begin"), std::string("@ok"));
+  CHECK_EQ(x.r.app.console("upload cert add MIIBszCCAVmgAwIBAgIU"), std::string("@ok"));
+  CHECK(x.r.app.console("upload cert add not base64!").rfind("@error", 0) == 0);
+  CHECK_EQ(x.r.app.console("upload cert add AbC+/=="), std::string("@ok"));
+  CHECK(x.r.app.console("upload cert end").rfind("@ok upload_cert", 0) == 0);
+  const auto pem = x.r.fake.get("upload_cert");
+  CHECK(pem.has_value());
+  if (pem)
+    CHECK_EQ(*pem, std::string("-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIU\nAbC+/==\n-----END CERTIFICATE-----\n"));
+  CHECK(x.r.app.console("upload").find("\"configured\":true") != std::string::npos);
 }

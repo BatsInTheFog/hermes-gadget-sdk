@@ -43,6 +43,8 @@ class SdRecorder final : public hg::AudioRecorder {
   void feed(const int16_t* pcm, size_t count, uint32_t rate);
 
   bool ready() override;
+  // The start-up check of the card is done (until then nothing else touches /recordings).
+  bool checked() const { return checked_.load(); }
   bool start(std::string_view name, std::string& error) override;
   void pause(bool on) override;
   void stop(bool discard) override;

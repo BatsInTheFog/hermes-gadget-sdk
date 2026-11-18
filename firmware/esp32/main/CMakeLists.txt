@@ -64,6 +64,7 @@ idf_component_register(
         "port_sdlog.cpp"
         "port_sd.cpp"
         "port_recorder.cpp"
+        "port_upload.cpp"
         "port_power.cpp"
         "port_latch_power.cpp"
         "port_opus.cpp"
@@ -104,6 +105,7 @@ idf_component_register(
         ${HG_P4_REQUIRES}
         ${HG_CORES3_CAMERA_REQUIRES}
         esp_netif
+        esp_http_client
         esp_http_server
         esp_psram
         esp_timer

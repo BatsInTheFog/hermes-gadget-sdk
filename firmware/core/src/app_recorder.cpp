@@ -132,6 +132,42 @@ void App::recorder_finish(bool keep) {
   update_model();
 }
 
+bool App::recording_now() const {
+  return rec_open_ && (rec_phase_ == RecPhase::Recording || rec_phase_ == RecPhase::Paused ||
+                       rec_phase_ == RecPhase::Choose || rec_phase_ == RecPhase::Saving);
+}
+
+void App::recorder_upload_tick(uint32_t t) {
+  const RecordingUploader::Status us = hal_.uploads->status();
+  const bool ours_now = us.uploading && us.current == rec_saved_name_;
+  if (us.last_sent == rec_saved_name_ && !ours_now) {
+    recorder_message("Sent", "to Nextcloud", true, kRecSavedMs);
+    return;
+  }
+  if (us.failures > rec_upload_fail_) {
+    recorder_message("Saved", "Will upload later", true, 3000);
+    return;
+  }
+  if (static_cast<int32_t>(t - rec_upload_until_) >= 0) {  // a long one: it goes on behind the face
+    close_recorder();
+    return;
+  }
+  const uint32_t sig = (ours_now ? 512u + us.percent : 0u) + (us.uploading ? 256u : 0u);
+  if (sig != rec_sig_) {
+    rec_sig_ = sig;
+    update_model();
+  }
+}
+
+std::string App::upload_line() const {
+  if (!hal_.uploads) return {};
+  const RecordingUploader::Status us = hal_.uploads->status();
+  if (us.uploading) return "Uploading recording " + std::to_string(us.percent) + "%";
+  if (us.waiting == 1) return "1 recording waiting";
+  if (us.waiting > 1) return std::to_string(us.waiting) + " recordings waiting";
+  return {};
+}
+
 void App::recorder_message(std::string message, std::string detail, bool good, uint32_t for_ms) {
   rec_phase_ = RecPhase::Done;
   rec_message_ = std::move(message);
@@ -235,15 +271,35 @@ void App::recorder_tick() {
         log(LogLevel::Info, "recorder: saved " + st.file + " (" + std::to_string(st.samples / kRecordRate) + " s" +
                                 (st.dropped ? ", " + std::to_string(st.dropped) + " samples dropped" : std::string()) +
                                 ")");
-        recorder_message("Saved", slash == std::string::npos ? st.file : st.file.substr(slash + 1), true,
-                         kRecSavedMs);
+        rec_saved_name_ = slash == std::string::npos ? st.file : st.file.substr(slash + 1);
+        recorder_message("Saved", rec_saved_name_, true, kRecSavedMs);
+        rec_then_upload_ = hal_.uploads != nullptr && hal_.uploads->status().configured;
       } else if (st.state == AudioRecorder::State::Failed) {
         log(LogLevel::Error, "recorder: " + st.error);
         recorder_message("Not saved", st.error, false, 5000);
       }
       break;
     case RecPhase::Done:
-      if (static_cast<int32_t>(t - rec_done_until_) >= 0) close_recorder();
+      if (static_cast<int32_t>(t - rec_done_until_) < 0) break;
+      if (rec_then_upload_) {  // "Saved" has shown: now the upload, or why not yet
+        rec_then_upload_ = false;
+        if (!network_up_) {
+          recorder_message("Saved", "Will upload when online", true, 3000);
+          break;
+        }
+        const RecordingUploader::Status us = hal_.uploads->status();
+        rec_upload_sent_ = us.sent;
+        rec_upload_fail_ = us.failures;
+        rec_upload_until_ = t + kRecUploadShowMs;
+        rec_phase_ = RecPhase::Upload;
+        hal_.uploads->kick();
+        update_model();
+        break;
+      }
+      close_recorder();
+      break;
+    case RecPhase::Upload:
+      recorder_upload_tick(t);
       break;
   }
 }
@@ -256,6 +312,16 @@ void App::recorder_model(UiModel& m) {
   for (int i = 0; i < 5; ++i) r.mic[i] = rec_mic_[i];
   r.mic_x = rec_mic_x_;
   r.mic_y = rec_mic_y_;
+  if (rec_phase_ == RecPhase::Upload) {
+    r.phase = RecorderView::Phase::Message;
+    r.message = "Uploading...";
+    r.good = true;
+    const RecordingUploader::Status us = hal_.uploads->status();
+    if (us.uploading && us.current == rec_saved_name_) r.detail = std::to_string(us.percent) + "%";
+    else if (us.uploading) r.detail = "Sending an earlier recording first";
+    else r.detail.clear();
+    return;
+  }
   if (rec_phase_ == RecPhase::Saving || rec_phase_ == RecPhase::Done) {
     r.phase = RecorderView::Phase::Message;
     r.message = rec_message_;
@@ -293,7 +359,8 @@ void App::recorder_press(int x, int y) {
     apply_backlight();
     return;
   }
-  if (rec_phase_ == RecPhase::Done) {  // a tap on "Saved" goes back to the face at once
+  if (rec_phase_ == RecPhase::Done || rec_phase_ == RecPhase::Upload) {  // a tap goes back to the face at once
+    rec_then_upload_ = false;  // the upload carries on behind the face
     rec_swallow_ = true;
     close_recorder();
     return;

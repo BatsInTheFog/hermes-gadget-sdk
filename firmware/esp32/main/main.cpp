@@ -5,6 +5,7 @@
 #include "port_sdlog.hpp"
 #include "port_sd.hpp"
 #include "port_recorder.hpp"
+#include "port_upload.hpp"
 
 #include <cstring>
 #include <utility>
@@ -78,6 +79,7 @@ hgp::I2sSpeaker g_speaker;
 hgp::CodecAudio g_codec;
 hgp::CodecMic g_codec_mic;
 hgp::SdRecorder g_recorder;
+hgp::SdUploader g_uploader;
 hgp::CodecSpeaker g_codec_speaker;
 hgp::OpusSpeakerDecoder g_opus;
 hgp::TouchInput g_touch;
@@ -530,6 +532,7 @@ extern "C" void app_main(void) {
   if (board.recorder && board.sd.enabled && hal.mic == &g_codec_mic && g_recorder.begin()) {
     hal.recorder = &g_recorder;
     hgp::g_recorder_tap = &g_recorder;
+    if (board.tailnet && g_uploader.begin(g_storage, g_recorder)) hal.uploads = &g_uploader;  // to Nextcloud (port_upload.hpp)
   }
   const bool imu = peripherals_ready && board.imu.enabled && g_motion.begin(board.imu, i2c_bus);
   g_time.begin(board.rtc, i2c_bus, g_storage);
@@ -715,7 +718,7 @@ extern "C" void app_main(void) {
     if (key == "wifi_ssid" || key == "wifi_pass") app.close_wifi_setup();
     if (key == "wifi_ssid" || key == "wifi_pass" || key == "wifi_nets") g_wifi.networks_changed();
     if (key == "touch_cancel") apply_touch_cancel();
-    if (key == "clock") g_time.set_wanted(app.clock_enabled());
+    if (key == "clock") g_time.set_wanted(app.clock_enabled() || hgp::g_recorder_tap != nullptr);
     if (key == "timezone") g_time.apply_timezone(g_storage);
 #if !CONFIG_HG_BOARD_ESP32_CYD
     if (key == "touch_wake") g_touch.set_wakes(app.touch_wake());

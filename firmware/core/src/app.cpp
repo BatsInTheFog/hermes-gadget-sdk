@@ -115,7 +115,10 @@ bool parse_battery_alert(std::string_view value, uint8_t* out) {
   return true;
 }
 
-bool is_secret(std::string_view key) { return key == "token" || key == "wifi_pass" || key == "ts_key"; }
+bool is_secret(std::string_view key) {
+  // upload_url holds the share's token.
+  return key == "token" || key == "wifi_pass" || key == "ts_key" || key == "upload_url" || key == "upload_pass";
+}
 
 // Settings a board with DeviceProfile::tailnet adds (docs/tailnet.md).
 const char* const kTailnetKeys[] = {"tailnet", "ts_key"};
@@ -466,6 +469,7 @@ void App::on_network(bool up, std::string_view detail) {
     log(LogLevel::Warn, "network down: " + std::string(detail.empty() ? "no detail" : detail) + " (" + activity() + ")");
   network_up_ = up;
   network_detail_ = std::string(detail);
+  if (up && hal_.uploads) hal_.uploads->kick();  // a new network: waiting recordings try at once
   if (!up) {
     // Only a connection (or a connect in flight) the network took with it: after the WebSocket
     // reported its loss, the session already ended, and a second close would count it twice.
@@ -2720,6 +2724,18 @@ void App::tick() {
   settings_tick();
   camera_tick();
   recorder_tick();
+  if (hal_.uploads) {
+    hal_.uploads->set_allowed(network_up_ && !recording_now());
+    if (t - upload_seen_at_ >= 500) {
+      upload_seen_at_ = t;
+      const RecordingUploader::Status us = hal_.uploads->status();
+      const uint32_t sig = us.waiting * 4096 + (us.uploading ? 2048 + us.percent : 0);
+      if (sig != upload_sig_) {
+        upload_sig_ = sig;
+        if (!rec_open_) update_model();
+      }
+    }
+  }
   phone_tick();
 
   if (phase_ == Phase::Boot && static_cast<int32_t>(t - boot_until_) >= 0) {
@@ -3275,6 +3291,8 @@ void App::update_model() {
       if (sessions)
         m.detail = profile_.touch_screen ? std::string(tr(Msg::SwipeDownForSessions)) : tr(Msg::ButtonShowsSessions, {cancel});
       // A running timer's time left is the caption's line (after the profile hint, when there is one).
+      const std::string uploads = upload_line();
+      if (!uploads.empty()) m.detail = uploads;
       const bool timing = timer_running_;
       if (timing) m.detail = tr(Msg::TimerLeft, {timer_left_text()});
       if (switching) {
@@ -3438,6 +3456,9 @@ bool App::known_setting(std::string_view key) const {
       if (key == k) return true;
     }
   }
+  // A board that uploads recordings: where to (a WebDAV folder, the share's token in it) and the
+  // share's password, if it has one. The server's certificate comes in through `upload cert`.
+  if (hal_.uploads && (key == "upload_url" || key == "upload_pass")) return true;
   return false;
 }
 
@@ -3505,6 +3526,53 @@ std::string App::console(std::string_view raw) {
     if (rest == "close") { close_camera(); return "@ok camera closed"; }
     return open_camera() ? "@ok camera" : "@error camera unavailable (no camera, or during a prompt, update or pairing)";
   }
+  if (cmd == "upload") {
+    // The recorder's uploads: their state, a look now, and the server's certificate (too long
+    // for one console line: sent as its PEM lines between `cert begin` and `cert end`).
+    if (!hal_.uploads) return "@error this device has no uploader";
+    if (rest == "now") {
+      hal_.uploads->kick();
+      return "@ok";
+    }
+    if (rest == "cert begin") {
+      upload_cert_ = "-----BEGIN CERTIFICATE-----\n";
+      return "@ok";
+    }
+    if (rest.rfind("cert add ", 0) == 0) {
+      if (upload_cert_.empty()) return "@error upload cert begin first";
+      const std::string line = trim(std::string_view(rest).substr(9));
+      if (line.empty() || line.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=") !=
+                              std::string::npos)
+        return "@error not a line of a PEM certificate";
+      if (upload_cert_.size() + line.size() > 3500) return "@error certificate too long";
+      upload_cert_ += line + "\n";
+      return "@ok";
+    }
+    if (rest == "cert end") {
+      if (upload_cert_.empty()) return "@error upload cert begin first";
+      upload_cert_ += "-----END CERTIFICATE-----\n";
+      const size_t n = upload_cert_.size();
+      const bool ok = hal_.storage && hal_.storage->set("upload_cert", upload_cert_);
+      upload_cert_.clear();
+      if (!ok) return "@error could not save the certificate";
+      hal_.uploads->kick();
+      return "@ok upload_cert (" + std::to_string(n) + " bytes)";
+    }
+    if (rest == "cert clear") {
+      if (hal_.storage) hal_.storage->erase("upload_cert");
+      return "@ok";
+    }
+    if (!rest.empty()) return "@error usage: upload [now | cert begin | cert add <line> | cert end | cert clear]";
+    const RecordingUploader::Status us = hal_.uploads->status();
+    json::Value r = json::Value::object();
+    r.set("configured", us.configured).set("allowed", network_up_ && !recording_now());
+    r.set("waiting", static_cast<double>(us.waiting)).set("uploading", us.uploading);
+    if (us.uploading) r.set("current", us.current).set("percent", static_cast<double>(us.percent));
+    r.set("sent", static_cast<double>(us.sent)).set("failures", static_cast<double>(us.failures));
+    if (!us.last_error.empty()) r.set("last_error", us.last_error);
+    if (us.retry_in_s) r.set("retry_in_s", static_cast<double>(us.retry_in_s));
+    return "@upload " + r.dump();
+  }
   if (cmd == "rec") {
     // The voice recorder: its state and the mic level (for tuning the gain), and driving it.
     if (rest == "start") return open_recorder() ? "@ok recording" : "@error recorder unavailable (no card or art, or busy)";
@@ -3527,7 +3595,7 @@ std::string App::console(std::string_view raw) {
       return "@ok";
     }
     if (!rest.empty()) return "@error usage: rec [start | pause | resume | stop | save | delete | level reset]";
-    static const char* const kPhases[] = {"recording", "paused", "choose", "saving", "done"};
+    static const char* const kPhases[] = {"recording", "paused", "choose", "saving", "done", "upload"};
     json::Value r = json::Value::object();
     r.set("available", recorder_available()).set("open", rec_open_);
     if (rec_open_) r.set("phase", kPhases[static_cast<int>(rec_phase_)]);
@@ -3616,6 +3684,8 @@ std::string App::console(std::string_view raw) {
       return "@error time_format must be 12h or 24h";
     if (key == "tailnet" && !value.empty() && value != "on" && value != "off")
       return "@error tailnet must be on or off";
+    if (key == "upload_url" && !value.empty() && (value.rfind("https://", 0) != 0 || value.back() != '/'))
+      return "@error upload_url must be an https:// address ending in /";
     if (key == "ts_key" && !value.empty() && !valid_tailnet_key(value))
       return "@error ts_key must be a Tailscale auth key (tskey-...)";
     if (key == "language" && !value.empty() && value != "auto" && !i18n::parse(value))

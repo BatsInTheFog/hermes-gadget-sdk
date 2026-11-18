@@ -147,6 +147,53 @@ TEST("recorder crash safety: what a cut-short file holds, and what is kept") {
   CHECK_EQ(hg::recording_final_name(".part"), std::string(".part"));
 }
 
+TEST("uploads: oldest first, finished recordings only") {
+  const auto order = hg::upload_order({"wisp_20261118_090000.wav", "wisp_unsynced_0002.wav", "notes.txt",
+                                       "wisp_20261117_235959.wav", "wisp_20261118_100000.wav.part",
+                                       "wisp_unsynced_0001.wav", "wisp_20261118_085959.wav"});
+  const std::vector<std::string> want = {"wisp_20261117_235959.wav", "wisp_20261118_085959.wav",
+                                         "wisp_20261118_090000.wav", "wisp_unsynced_0001.wav",
+                                         "wisp_unsynced_0002.wav"};
+  CHECK(order == want);
+}
+
+TEST("uploads: the start time in a name") {
+  int64_t t = 0;
+  CHECK(hg::recording_time("wisp_20261118_090507.wav", t));
+  hg::WallTime w;
+  w.year = 2026, w.month = 11, w.day = 18, w.hour = 9, w.minute = 5, w.second = 7;
+  CHECK_EQ(t, hg::civil_seconds(w));
+  hg::WallTime epoch;
+  epoch.year = 1970;
+  CHECK_EQ(hg::civil_seconds(epoch), int64_t{0});
+  w.year = 2000, w.month = 3, w.day = 1, w.hour = 0, w.minute = 0, w.second = 0;
+  CHECK_EQ(hg::civil_seconds(w), int64_t{951868800});
+  CHECK(!hg::recording_time("wisp_unsynced_0001.wav", t));
+  CHECK(!hg::recording_time("wisp_20261318_090507.wav", t));
+}
+
+TEST("uploads: sent ones go after 14 days, or oldest first when space is short") {
+  const int64_t day = 86400, now = 100 * day;
+  std::vector<hg::SentFile> sent = {{"c", 100, now - 20 * day}, {"a", 100, now - 15 * day},
+                                    {"b", 100, now - 13 * day}, {"d", 100, now - 1 * day}};
+  auto del = hg::sent_cleanup(sent, now, 20ull << 30);
+  CHECK((del == std::vector<std::string>{"c", "a"}));
+  // Short of space: the oldest sent ones go until 2 GB is free, even young ones.
+  sent = {{"old", 1ull << 30, now - 3 * day}, {"mid", 1ull << 30, now - 2 * day}, {"new", 1ull << 30, now - day}};
+  del = hg::sent_cleanup(sent, now, 512ull << 20);
+  CHECK((del == std::vector<std::string>{"old", "mid"}));
+  CHECK(hg::sent_cleanup({}, now, 0).empty());
+}
+
+TEST("uploads: retries wait 30 s, doubling, at most 30 minutes") {
+  CHECK_EQ(hg::upload_backoff_ms(0), 0u);
+  CHECK_EQ(hg::upload_backoff_ms(1), 30000u);
+  CHECK_EQ(hg::upload_backoff_ms(2), 60000u);
+  CHECK_EQ(hg::upload_backoff_ms(4), 240000u);
+  CHECK_EQ(hg::upload_backoff_ms(7), 1800000u);
+  CHECK_EQ(hg::upload_backoff_ms(40), 1800000u);
+}
+
 TEST("recorder wav header: 16 kHz mono 16-bit") {
   uint8_t h[44];
   hg::wav_header(h, 32000, 16000);
