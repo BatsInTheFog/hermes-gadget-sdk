@@ -127,7 +127,9 @@ SdUploader::Result SdUploader::upload(const std::string& name, const std::string
     return Result::Failed;
   }
   FILE* f = std::fopen(path.c_str(), "rb");
-  auto* buf = static_cast<char*>(heap_caps_malloc(kChunk, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+  // PSRAM: internal RAM is scarce while TLS runs (the card driver copies through its own buffer).
+  auto* buf = static_cast<char*>(heap_caps_malloc(kChunk, MALLOC_CAP_SPIRAM));
+  if (!buf) buf = static_cast<char*>(heap_caps_malloc(kChunk, MALLOC_CAP_INTERNAL));
   if (!f || !buf) {
     if (f) std::fclose(f);
     heap_caps_free(buf);

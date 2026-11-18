@@ -48,3 +48,8 @@ CONFIG_LWIP_MAX_SOCKETS=16
 CONFIG_LWIP_SO_RCVBUF=y
 # Internal RAM: the relay's always-open TLS buffers in PSRAM.
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+# AES in software. With the TLS buffers in PSRAM, the AES accelerator copies every record
+# through a DMA buffer it allocates in internal RAM each time; uploads to Nextcloud failed
+# mid-file when that allocation did ("esp-aes: Failed to allocate memory"). Software AES
+# needs no such buffer and is fast enough for these links (port_upload.hpp).
+# CONFIG_MBEDTLS_HARDWARE_AES is not set
