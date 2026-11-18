@@ -147,4 +147,21 @@ void wav_header(uint8_t out[44], uint32_t data_bytes, uint32_t rate) {
   u32(40, data_bytes);
 }
 
+uint32_t wav_data_in_file(uint64_t file_size) {
+  if (file_size <= 44) return 0;
+  const uint64_t data = (file_size - 44) & ~uint64_t{1};  // whole 16-bit samples
+  return static_cast<uint32_t>(std::min<uint64_t>(data, 0xFFFFFFFFull - 36 - 1));
+}
+
+bool recording_worth_keeping(uint64_t data_bytes) {
+  return data_bytes > static_cast<uint64_t>(kRecordMinKeepS) * kRecordRate * 2;
+}
+
+std::string recording_final_name(std::string_view part_name) {
+  const std::string_view suffix = kPartSuffix;
+  if (part_name.size() > suffix.size() && part_name.substr(part_name.size() - suffix.size()) == suffix)
+    part_name.remove_suffix(suffix.size());
+  return std::string(part_name);
+}
+
 }  // namespace hg

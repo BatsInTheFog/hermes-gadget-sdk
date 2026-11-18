@@ -76,6 +76,16 @@ std::string recording_elapsed(uint32_t seconds);
 // A 44-byte PCM WAV header for `data_bytes` of 16-bit mono samples at `rate`.
 void wav_header(uint8_t out[44], uint32_t data_bytes, uint32_t rate);
 
+// Crash safety. A recording is written as <name>.wav.part, its header brought up to date every
+// few seconds, and renamed to <name>.wav when finished. At boot the port repairs what a power
+// loss left: the whole samples after the header that a file of `file_size` bytes holds...
+uint32_t wav_data_in_file(uint64_t file_size);
+// ...whether that much audio is worth keeping (more than kRecordMinKeepS)...
+bool recording_worth_keeping(uint64_t data_bytes);
+// ...and the finished name for a part file ("x.wav.part" -> "x.wav"; others unchanged).
+std::string recording_final_name(std::string_view part_name);
+constexpr const char* kPartSuffix = ".part";
+
 // The port's recorder: a microSD card, a ring buffer the mic task fills, and a writer task.
 class AudioRecorder {
  public:
@@ -88,6 +98,7 @@ class AudioRecorder {
     std::string file;        // its path on the card
     std::string error;
     bool discarded = false;  // Saved: the file was deleted instead (stop(true))
+    std::string boot_check;  // what the start-up check of the card did ("" until it ran)
   };
   virtual ~AudioRecorder() = default;
   // Whether a card is there to record to (mounts it if need be).

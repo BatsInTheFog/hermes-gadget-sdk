@@ -134,6 +134,19 @@ TEST("recorder timer: mm:ss, then h:mm:ss") {
   CHECK_EQ(hg::recording_elapsed(3600 * 2 + 61), std::string("2:01:01"));
 }
 
+TEST("recorder crash safety: what a cut-short file holds, and what is kept") {
+  CHECK_EQ(hg::wav_data_in_file(0), 0u);
+  CHECK_EQ(hg::wav_data_in_file(44), 0u);
+  CHECK_EQ(hg::wav_data_in_file(45), 0u);      // half a sample
+  CHECK_EQ(hg::wav_data_in_file(44 + 8193), 8192u);
+  CHECK(!hg::recording_worth_keeping(16000 * 2 * 6));  // exactly 6 s: deleted
+  CHECK(hg::recording_worth_keeping(16000 * 2 * 6 + 2));
+  CHECK(!hg::recording_worth_keeping(0));
+  CHECK_EQ(hg::recording_final_name("wisp_20261117_175741.wav.part"), std::string("wisp_20261117_175741.wav"));
+  CHECK_EQ(hg::recording_final_name("wisp_20261117_175741.wav"), std::string("wisp_20261117_175741.wav"));
+  CHECK_EQ(hg::recording_final_name(".part"), std::string(".part"));
+}
+
 TEST("recorder wav header: 16 kHz mono 16-bit") {
   uint8_t h[44];
   hg::wav_header(h, 32000, 16000);

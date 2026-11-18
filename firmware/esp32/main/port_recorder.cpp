@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <vector>
 #include <cstdlib>
 #include <cstring>
 
@@ -39,7 +40,7 @@ bool SdRecorder::begin() {
   }
   scratch_.reserve(512);
   // Below the mic task (6), above the app's housekeeping: it only ever waits on the card.
-  if (xTaskCreate(&SdRecorder::task, "hg-rec", 4096, this, 5, &task_) != pdPASS) return false;
+  if (xTaskCreate(&SdRecorder::task, "hg-rec", 6144, this, 5, &task_) != pdPASS) return false;
   ESP_LOGI(TAG, "recorder ready: %u KB ring in PSRAM", static_cast<unsigned>(kRingSamples * 2 / 1024));
   return true;
 }
@@ -87,6 +88,7 @@ std::string SdRecorder::unsynced_name() {
 
 bool SdRecorder::start(std::string_view name, std::string& error) {
   if (!ring_) return error = "recorder not set up", false;
+  if (!checked_.load()) return error = "the card is still being checked", false;
   {
     Locked l(lock_);
     if (state_ == State::Recording || state_ == State::Paused || state_ == State::Finishing)
@@ -98,16 +100,18 @@ bool SdRecorder::start(std::string_view name, std::string& error) {
   if (free_mb < kMinFreeMb) return error = "card full (" + std::to_string(free_mb) + " MB free)", false;
   if (mkdir(kDir, 0775) != 0 && errno != EEXIST) return error = "can't make " + std::string(kDir), false;
   const std::string file = std::string(kDir) + "/" + (name.empty() ? unsynced_name() : std::string(name));
+  const std::string part = file + hg::kPartSuffix;
   struct stat st = {};
-  if (stat(file.c_str(), &st) == 0) return error = "a recording with that name exists", false;
-  FILE* f = std::fopen(file.c_str(), "wb");
+  if (stat(file.c_str(), &st) == 0 || stat(part.c_str(), &st) == 0)
+    return error = "a recording with that name exists", false;
+  FILE* f = std::fopen(part.c_str(), "wb");
   if (!f) return error = "can't create the file", false;
   std::setvbuf(f, nullptr, _IONBF, 0);  // whole blocks go straight to FATFS
   uint8_t header[44];
   hg::wav_header(header, 0, hg::kRecordRate);  // sizes filled in when it is finished
   if (std::fwrite(header, 1, sizeof(header), f) != sizeof(header)) {
     std::fclose(f);
-    std::remove(file.c_str());
+    std::remove(part.c_str());
     return error = "can't write to the card", false;
   }
   // The counters first: the writer acts as soon as it sees a file.
@@ -120,16 +124,18 @@ bool SdRecorder::start(std::string_view name, std::string& error) {
   paused_.store(false);
   stop_req_.store(false);
   data_bytes_ = 0;
+  checkpoint_at_ = xTaskGetTickCount();
   {
     Locked l(lock_);
     file_ = f;
     path_ = file;
+    part_ = part;
     error_.clear();
     discarded_ = false;
     state_ = State::Recording;
   }
   recording_.store(true, std::memory_order_release);
-  ESP_LOGI(TAG, "recording to %s (%u MB free)", file.c_str(), static_cast<unsigned>(free_mb));
+  ESP_LOGI(TAG, "recording to %s (%u MB free)", part.c_str(), static_cast<unsigned>(free_mb));
   return true;
 }
 
@@ -162,6 +168,7 @@ SdRecorder::Status SdRecorder::status() {
   s.file = path_;
   s.error = error_;
   s.discarded = discarded_;
+  s.boot_check = boot_check_;
   return s;
 }
 
@@ -174,7 +181,7 @@ void SdRecorder::fail(const std::string& why) {
   recording_.store(false);
   if (file_) std::fclose(file_);
   file_ = nullptr;
-  ESP_LOGE(TAG, "%s: %s", path_.c_str(), why.c_str());
+  ESP_LOGE(TAG, "%s: %s", part_.c_str(), why.c_str());  // the .part stays: the next start-up repairs it
   sd::unmount();  // a pulled or failing card: the next start mounts afresh
   Locked l(lock_);
   error_ = why;
@@ -200,9 +207,9 @@ void SdRecorder::finish() {
   if (discard_.load()) {  // too short to keep: gone, and nothing is left to upload
     std::fclose(file_);
     file_ = nullptr;
-    std::remove(path_.c_str());
+    std::remove(part_.c_str());
     head_.store(tail_.load());
-    ESP_LOGI(TAG, "deleted %s (too short)", path_.c_str());
+    ESP_LOGI(TAG, "deleted %s (too short)", part_.c_str());
     Locked l(lock_);
     discarded_ = true;
     state_ = State::Saved;
@@ -216,6 +223,7 @@ void SdRecorder::finish() {
   ok = std::fclose(file_) == 0 && ok;
   file_ = nullptr;
   if (!ok) return fail("couldn't finish the file");
+  if (std::rename(part_.c_str(), path_.c_str()) != 0) return fail("couldn't rename the finished file");
   ESP_LOGI(TAG, "saved %s: %u s, %u samples dropped, ring peak %u%%", path_.c_str(),
            static_cast<unsigned>(data_bytes_ / 2 / hg::kRecordRate), static_cast<unsigned>(dropped_.load()),
            static_cast<unsigned>(peak_.load()));
@@ -223,9 +231,80 @@ void SdRecorder::finish() {
   state_ = State::Saved;
 }
 
+bool SdRecorder::checkpoint() {
+  // The header with the size so far, the write position back at the end, then a sync: FATFS
+  // writes the file's size into its directory entry, so the file plays to here after a crash.
+  uint8_t header[44];
+  hg::wav_header(header, static_cast<uint32_t>(std::min<uint64_t>(data_bytes_, 0xFFFFFFFFu - 36)), hg::kRecordRate);
+  return std::fseek(file_, 0, SEEK_SET) == 0 && std::fwrite(header, 1, sizeof(header), file_) == sizeof(header) &&
+         std::fseek(file_, 0, SEEK_END) == 0 && fsync(fileno(file_)) == 0;
+}
+
+namespace {
+bool ends_with(const std::string& s, const char* tail) {
+  const size_t n = std::strlen(tail);
+  return s.size() >= n && s.compare(s.size() - n, n, tail) == 0;
+}
+}  // namespace
+
+void SdRecorder::recover() {
+  int repaired = 0, deleted = 0, failed = 0;
+  std::vector<std::string> names;
+  if (sd::mount()) {
+    if (DIR* d = opendir(kDir)) {
+      while (dirent* e = readdir(d))
+        if (e->d_type != DT_DIR) names.emplace_back(e->d_name);
+      closedir(d);
+    }
+  }
+  for (const std::string& name : names) {
+    const bool part = ends_with(name, ".wav.part");
+    if (!part && !ends_with(name, ".wav")) continue;
+    const std::string path = std::string(kDir) + "/" + name;
+    struct stat st = {};
+    if (stat(path.c_str(), &st) != 0) continue;
+    const uint32_t data = hg::wav_data_in_file(static_cast<uint64_t>(st.st_size));
+    if (!hg::recording_worth_keeping(data)) {
+      if (std::remove(path.c_str()) == 0) {
+        ++deleted;
+        ESP_LOGI(TAG, "deleted %s: %u s, too short to keep", name.c_str(), static_cast<unsigned>(data / 2 / hg::kRecordRate));
+      } else {
+        ++failed;
+      }
+      continue;
+    }
+    if (!part) continue;
+    // A recording a power loss cut short: the header gets the size the file really has.
+    uint8_t header[44];
+    hg::wav_header(header, data, hg::kRecordRate);
+    FILE* f = std::fopen(path.c_str(), "r+b");
+    bool ok = f && std::fwrite(header, 1, sizeof(header), f) == sizeof(header);
+    if (f) ok = std::fclose(f) == 0 && ok;
+    std::string target = std::string(kDir) + "/" + hg::recording_final_name(name);
+    struct stat taken = {};
+    if (stat(target.c_str(), &taken) == 0) target.insert(target.size() - 4, "_recovered");
+    ok = ok && std::rename(path.c_str(), target.c_str()) == 0;
+    if (ok) {
+      ++repaired;
+      ESP_LOGW(TAG, "recovered %s: %u s", target.c_str(), static_cast<unsigned>(data / 2 / hg::kRecordRate));
+    } else {
+      ++failed;
+      ESP_LOGE(TAG, "couldn't recover %s", name.c_str());
+    }
+  }
+  char note[96];
+  std::snprintf(note, sizeof(note), "%s: %d recovered, %d short deleted, %d failed",
+                names.empty() ? "no recordings" : "checked", repaired, deleted, failed);
+  ESP_LOGI(TAG, "start-up check: %s", note);
+  Locked l(lock_);
+  boot_check_ = note;
+}
+
 void SdRecorder::task(void* arg) { static_cast<SdRecorder*>(arg)->run(); }
 
 void SdRecorder::run() {
+  recover();  // before the first recording can start
+  checked_.store(true);
   for (;;) {
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200));
     if (!file_) continue;
@@ -233,7 +312,14 @@ void SdRecorder::run() {
       finish();
       continue;
     }
-    if (!write_some(false)) fail("card write failed");
+    if (!write_some(false)) {
+      fail("card write failed");
+      continue;
+    }
+    if (xTaskGetTickCount() - checkpoint_at_ >= pdMS_TO_TICKS(kCheckpointMs)) {
+      checkpoint_at_ = xTaskGetTickCount();
+      if (!checkpoint()) fail("card write failed (checkpoint)");
+    }
   }
 }
 

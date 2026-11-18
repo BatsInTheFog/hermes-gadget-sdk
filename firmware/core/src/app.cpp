@@ -3535,6 +3535,7 @@ std::string App::console(std::string_view raw) {
       r.set("dropped", static_cast<double>(st.dropped)).set("ring_peak_pct", static_cast<double>(st.ring_peak));
       r.set("file", st.file);
       if (!st.error.empty()) r.set("error", st.error);
+      if (!st.boot_check.empty()) r.set("boot_check", st.boot_check);
     }
     return "@rec " + r.dump();
   }

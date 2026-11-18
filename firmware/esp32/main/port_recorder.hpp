@@ -8,6 +8,13 @@
 //
 // Files: /sdcard/recordings/wisp_YYYYMMDD_HHMMSS.wav (the name the app passes, from the local
 // start time), or wisp_unsynced_<n>.wav when the clock was never set.
+//
+// Crash safety: while recording the file is <name>.wav.part. Every kCheckpointMs its WAV header
+// is rewritten with the size so far and the file synced (FATFS writes its size into the
+// directory), so a dead battery or a pulled card loses at most the last few seconds. Finished,
+// it is renamed to <name>.wav. At start-up the writer task checks the folder first: a leftover
+// .part gets its header fixed and becomes .wav (so it is uploaded), and any recording of
+// kRecordMinKeepS or less is deleted.
 #pragma once
 
 #include <atomic>
@@ -28,6 +35,7 @@ class SdRecorder final : public hg::AudioRecorder {
   static constexpr size_t kRingSamples = 512 * 1024;  // 1 MB of PSRAM: ~32 s at 16 kHz
   static constexpr size_t kBlockBytes = 8 * 1024;     // one card write
   static constexpr uint32_t kMinFreeMb = 64;          // refuse to start on a nearly full card
+  static constexpr uint32_t kCheckpointMs = 10000;    // header and directory brought up to date
 
   // Sets aside the ring and starts the writer task; false leaves the recorder off.
   bool begin();
@@ -46,7 +54,9 @@ class SdRecorder final : public hg::AudioRecorder {
   void run();
   size_t buffered() const { return head_.load(std::memory_order_acquire) - tail_.load(std::memory_order_relaxed); }
   bool write_some(bool all);  // ring -> card; false on a write error
-  void finish();              // drain, final header, close
+  void finish();              // drain, final header, close, rename
+  bool checkpoint();          // header with the size so far, then sync
+  void recover();             // the start-up check of the folder (see above)
   void fail(const std::string& why);
   std::string unsynced_name();
 
@@ -57,7 +67,10 @@ class SdRecorder final : public hg::AudioRecorder {
   FILE* file_ = nullptr;
   // Written by feed() (head) and the writer (tail); free-running sample counts.
   std::atomic<size_t> head_{0}, tail_{0};
-  std::atomic<bool> recording_{false}, paused_{false}, stop_req_{false}, discard_{false};
+  std::atomic<bool> recording_{false}, paused_{false}, stop_req_{false}, discard_{false}, checked_{false};
+  TickType_t checkpoint_at_ = 0;
+  std::string part_;        // the file being written (path_ + ".part")
+  std::string boot_check_;  // what recover() did
   bool discarded_ = false;
   std::atomic<uint32_t> samples_{0}, dropped_{0}, peak_{0};
   uint64_t data_bytes_ = 0;  // on the card so far
