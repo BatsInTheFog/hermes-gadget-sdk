@@ -198,6 +198,36 @@ void TailnetLink::settings_changed() {
   else if (wanted && app_->tailnet_key().empty()) app_->on_tunnel(false, "Tailnet: no auth key (set ts_key)");
 }
 
+bool TailnetLink::wake_peer(uint32_t ip, uint32_t timeout_ms) {
+#if CONFIG_HG_TAILNET
+  if (!node_ || !ip) return false;
+  tailtiny_t* ml = node(node_);
+  if (ml_wg_mgr_peer_is_up(ml, ip)) return true;
+  if (ml_wg_mgr_trigger_handshake(ml, ip) == ESP_ERR_NOT_FOUND) {
+    ESP_LOGW(TAG, "%s isn't a peer on this tailnet", ip_text(ip).c_str());
+    return false;
+  }
+  ml_wg_mgr_send_cmm(ml, ip);
+  for (uint32_t waited = 0; waited < timeout_ms; waited += 500) {
+    vTaskDelay(pdMS_TO_TICKS(500));
+    if (ml_wg_mgr_peer_is_up(ml, ip)) {
+      ESP_LOGI(TAG, "session with %s up after %u ms", ip_text(ip).c_str(), static_cast<unsigned>(waited + 500));
+      return true;
+    }
+    if ((waited + 500) % 5000 == 0) {  // the first may have been dropped
+      ml_wg_mgr_trigger_handshake(ml, ip);
+      ml_wg_mgr_send_cmm(ml, ip);
+    }
+  }
+  ESP_LOGW(TAG, "no session with %s after %u ms", ip_text(ip).c_str(), static_cast<unsigned>(timeout_ms));
+  return false;
+#else
+  (void)ip;
+  (void)timeout_ms;
+  return false;
+#endif
+}
+
 void TailnetLink::tick(uint32_t now) {
   if (restart_) {
     if (!restart_timed_) {

@@ -532,6 +532,7 @@ extern "C" void app_main(void) {
   if (board.recorder && board.sd.enabled && hal.mic == &g_codec_mic && g_recorder.begin()) {
     hal.recorder = &g_recorder;
     hgp::g_recorder_tap = &g_recorder;
+    g_uploader.wake_peer = [](uint32_t ip) { return g_tailnet.wake_peer(ip, 15000); };
     if (board.tailnet && g_uploader.begin(g_storage, g_recorder)) hal.uploads = &g_uploader;  // to Nextcloud (port_upload.hpp)
   }
   const bool imu = peripherals_ready && board.imu.enabled && g_motion.begin(board.imu, i2c_bus);

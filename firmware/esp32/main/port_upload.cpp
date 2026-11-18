@@ -135,6 +135,15 @@ SdUploader::Result SdUploader::upload(const std::string& name, const std::string
     return Result::Failed;
   }
   std::setvbuf(f, nullptr, _IONBF, 0);
+  // A server on the tailnet: its WireGuard session first, or the connect can't get through.
+  // (hg::tailnet_ip reads ws:// addresses, Hermes's kind: the same host part.)
+  const uint32_t ip = url.rfind("https://", 0) == 0 ? hg::tailnet_ip("ws://" + url.substr(8)) : 0;
+  if (ip && wake_peer && !wake_peer(ip)) {
+    std::fclose(f);
+    heap_caps_free(buf);
+    set_error("the server isn't reachable over the tailnet");
+    return Result::Failed;
+  }
   const std::string full = url + name;
   esp_http_client_config_t cfg = {};
   cfg.url = full.c_str();

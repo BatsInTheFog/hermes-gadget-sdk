@@ -978,6 +978,10 @@ class TailnetLink {
   // that couldn't be scheduled.
   bool forget();
   void report(hg::json::Value& r);  // the `diag` report's "tailnet" part
+  // Brings up the WireGuard session with tailnet peer `ip` (host order) before a socket connects
+  // to it, as TailTiny's own sockets do: lwIP sockets can't reach a peer without one, and only
+  // Hermes's is kept up. Blocks up to `timeout_ms`; any task. False: not up (or no tailnet).
+  bool wake_peer(uint32_t ip, uint32_t timeout_ms);
 
  private:
   void start();

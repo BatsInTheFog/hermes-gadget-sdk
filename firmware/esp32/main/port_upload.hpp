@@ -30,6 +30,8 @@ namespace hgp {
 class SdUploader final : public hg::RecordingUploader {
  public:
   bool begin(hg::Storage& storage, SdRecorder& recorder);
+  // Brings up the tailnet session with the server first (TailnetLink::wake_peer); set by main.
+  bool (*wake_peer)(uint32_t ip) = nullptr;
   void set_allowed(bool on) override;
   void kick() override;
   Status status() override;
