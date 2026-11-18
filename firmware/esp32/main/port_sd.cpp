@@ -228,7 +228,20 @@ std::string command(int argc, char** argv) {
     if (mb < 1 || mb > 256) return "@error sd test takes 1..256 MB";
     return test(mb);
   }
-  return "@error usage: sd | sd ls [dir] | sd test [MB]";
+  if (std::strcmp(argv[1], "rm") == 0 && argc == 3) {
+    // One file on the card (never a folder). The path must be under /sdcard.
+    const std::string path = argv[2];
+    if (path.rfind(std::string(kMountPoint) + "/", 0) != 0 || path.find("..") != std::string::npos)
+      return "@error sd rm takes a file under /sdcard";
+    esp_err_t err = ESP_OK;
+    if (!mount_locked(&err)) return fmt("@error sd: not mounted (%s)", esp_err_to_name(err));
+    struct stat st = {};
+    if (stat(path.c_str(), &st) != 0) return "@error sd rm: no such file";
+    if (S_ISDIR(st.st_mode)) return "@error sd rm: that is a folder";
+    if (std::remove(path.c_str()) != 0) return "@error sd rm: couldn't delete it";
+    return "@ok deleted " + path;
+  }
+  return "@error usage: sd | sd ls [dir] | sd test [MB] | sd rm <file>";
 }
 
 }  // namespace hgp::sd

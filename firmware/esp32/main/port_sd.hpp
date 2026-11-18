@@ -7,6 +7,7 @@
 //   sd ls [dir]      a directory's entries (default /sdcard)
 //   sd test [MB]     writes a test file of MB megabytes (default 4), reads it back and checks
 //                    every byte, then deletes it; reports write and read speed
+//   sd rm <file>     deletes one file under /sdcard (never a folder)
 #pragma once
 
 #include <string>
