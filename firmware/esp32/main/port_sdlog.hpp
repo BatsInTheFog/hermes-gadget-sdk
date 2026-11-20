@@ -33,6 +33,7 @@ class SdLogger {
   bool mounted_ = false;
   FILE* file_ = nullptr;
   size_t written_ = 0;  // bytes in the current file, for rotation mid-session
+  uint32_t synced_at_ = 0;  // ticks of the last fsync (the file's size on the card)
 };
 
 }  // namespace hgp

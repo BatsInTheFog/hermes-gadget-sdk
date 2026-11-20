@@ -1,6 +1,8 @@
 // See port_sdlog.hpp.
 #include "port.hpp"  // first: pulls in FreeRTOS.h ahead of task.h/queue.h
 #include "port_sdlog.hpp"
+
+#include <unistd.h>
 #include "port_sd.hpp"
 
 #include <algorithm>
@@ -28,6 +30,7 @@ constexpr const char* kPath = "/sdcard/hermes.log";
 constexpr const char* kRotatedPath = "/sdcard/hermes.log.1";
 constexpr size_t kRingBytes = 16 * 1024;
 constexpr size_t kLineBytes = 256;  // longer log lines are cut, never on the console
+constexpr uint32_t kSyncMs = 10000;
 constexpr size_t kRotateBytes = 32 * 1024 * 1024;  // two files: days of history on a card that stays in
 
 char* g_ring = nullptr;
@@ -136,6 +139,13 @@ void SdLogger::flush() {
     return;
   }
   written_ += n;
+  // FATFS writes the file's size to its directory entry only on a sync or a close: without
+  // this, a crash or a power cut left the whole session's log at 0 bytes, exactly when it
+  // was wanted. Every 10 s, not every pass, to spare the card.
+  if (xTaskGetTickCount() - synced_at_ >= pdMS_TO_TICKS(kSyncMs)) {
+    synced_at_ = xTaskGetTickCount();
+    fsync(fileno(file_));
+  }
   // Rotate while running, not just at open: a long session would otherwise
   // grow past the cap until the card fills.
   if (written_ > kRotateBytes) {
