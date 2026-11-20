@@ -32,12 +32,13 @@ struct Locked {
 
 bool SdRecorder::begin() {
   ring_ = static_cast<int16_t*>(heap_caps_malloc(kRingSamples * sizeof(int16_t), MALLOC_CAP_SPIRAM));
-  block_ = static_cast<uint8_t*>(heap_caps_malloc(kBlockBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
   lock_ = xSemaphoreCreateMutex();
-  if (!ring_ || !block_ || !lock_) {
-    ESP_LOGE(TAG, "no memory for the recorder (ring %s, block %s)", ring_ ? "ok" : "failed", block_ ? "ok" : "failed");
+  if (!ring_ || !lock_) {
+    ESP_LOGE(TAG, "no memory for the recorder's ring");
     return false;
   }
+  // The card's write buffer is internal RAM, which uploads need for TLS: it is set aside only
+  // while recording (the two never run at once).
   scratch_.reserve(512);
   // Below the mic task (6), above the app's housekeeping: it only ever waits on the card.
   if (xTaskCreate(&SdRecorder::task, "hg-rec", 6144, this, 5, &task_) != pdPASS) return false;
@@ -104,14 +105,20 @@ bool SdRecorder::start(std::string_view name, std::string& error) {
   struct stat st = {};
   if (stat(file.c_str(), &st) == 0 || stat(part.c_str(), &st) == 0)
     return error = "a recording with that name exists", false;
+  if (!block_) block_ = static_cast<uint8_t*>(heap_caps_malloc(kBlockBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+  if (!block_) return error = "no memory to record", false;
   FILE* f = std::fopen(part.c_str(), "wb");
-  if (!f) return error = "can't create the file", false;
+  if (!f) {
+    release_block();
+    return error = "can't create the file", false;
+  }
   std::setvbuf(f, nullptr, _IONBF, 0);  // whole blocks go straight to FATFS
   uint8_t header[44];
   hg::wav_header(header, 0, hg::kRecordRate);  // sizes filled in when it is finished
   if (std::fwrite(header, 1, sizeof(header), f) != sizeof(header)) {
     std::fclose(f);
     std::remove(part.c_str());
+    release_block();
     return error = "can't write to the card", false;
   }
   // The counters first: the writer acts as soon as it sees a file.
@@ -177,10 +184,16 @@ void SdRecorder::acknowledge() {
   if (state_ == State::Saved || state_ == State::Failed) state_ = State::Idle;
 }
 
+void SdRecorder::release_block() {
+  heap_caps_free(block_);
+  block_ = nullptr;
+}
+
 void SdRecorder::fail(const std::string& why) {
   recording_.store(false);
   if (file_) std::fclose(file_);
   file_ = nullptr;
+  release_block();
   ESP_LOGE(TAG, "%s: %s", part_.c_str(), why.c_str());  // the .part stays: the next start-up repairs it
   sd::unmount();  // a pulled or failing card: the next start mounts afresh
   Locked l(lock_);
@@ -209,6 +222,7 @@ void SdRecorder::finish() {
     file_ = nullptr;
     std::remove(part_.c_str());
     head_.store(tail_.load());
+    release_block();
     ESP_LOGI(TAG, "deleted %s (too short)", part_.c_str());
     Locked l(lock_);
     discarded_ = true;
@@ -223,6 +237,7 @@ void SdRecorder::finish() {
   ok = std::fclose(file_) == 0 && ok;
   file_ = nullptr;
   if (!ok) return fail("couldn't finish the file");
+  release_block();
   if (std::rename(part_.c_str(), path_.c_str()) != 0) return fail("couldn't rename the finished file");
   ESP_LOGI(TAG, "saved %s: %u s, %u samples dropped, ring peak %u%%", path_.c_str(),
            static_cast<unsigned>(data_bytes_ / 2 / hg::kRecordRate), static_cast<unsigned>(dropped_.load()),

@@ -589,14 +589,21 @@ void ml_derp_tx_task(void *arg) {
                 derp_regions_measured = true;
                 uint16_t current = ML_PREFERRED_DERP(ml);
                 int64_t closest_us, current_us;
-                uint16_t closest = derp_measure_regions(ml, current, &closest_us, &current_us);
-                /* Switch only for a clear win (>= 10 ms and >= 20% faster), so
-                 * regions with near-equal latency don't flip on every boot */
-                if (closest && closest != current && current_us >= 0 &&
-                    !(current_us - closest_us >= 10000 && closest_us * 5 <= current_us * 4)) {
-                    ESP_LOGI(TAG, "Keeping DERP region %u (%lld ms, about as fast)",
-                             current, current_us / 1000);
-                    closest = current;
+                uint16_t closest;
+                if (ml->derp_pinned_region) {
+                    /* Hermes gadget patch: the device's region, not the fastest */
+                    closest = ml->derp_pinned_region;
+                    ESP_LOGI(TAG, "DERP region %u (set by the device)", closest);
+                } else {
+                    closest = derp_measure_regions(ml, current, &closest_us, &current_us);
+                    /* Switch only for a clear win (>= 10 ms and >= 20% faster), so
+                     * regions with near-equal latency don't flip on every boot */
+                    if (closest && closest != current && current_us >= 0 &&
+                        !(current_us - closest_us >= 10000 && closest_us * 5 <= current_us * 4)) {
+                        ESP_LOGI(TAG, "Keeping DERP region %u (%lld ms, about as fast)",
+                                 current, current_us / 1000);
+                        closest = current;
+                    }
                 }
                 if (closest && closest != ml->derp_preferred_region) {
                     ml->derp_preferred_region = closest;

@@ -390,6 +390,10 @@ struct tailtiny_s {
     /* Lowest-latency DERP region we measured (0 = not measured yet). Reported
      * as PreferredDERP and used as our home region; kept in NVS. */
     volatile uint16_t derp_preferred_region;
+    /* Hermes gadget patch: a home DERP region the device chose (0: measure the fastest). Peers
+     * are reached through this node's own home region only, so every node it talks to should
+     * share it. */
+    uint16_t derp_pinned_region;
 
     /* Serialises the two biggest transient heap users (MapResponse parse in
      * coord, DERP TLS handshake in derp_tx) so their peaks never stack. */

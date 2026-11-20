@@ -28,7 +28,7 @@ constexpr const char* kPath = "/sdcard/hermes.log";
 constexpr const char* kRotatedPath = "/sdcard/hermes.log.1";
 constexpr size_t kRingBytes = 16 * 1024;
 constexpr size_t kLineBytes = 256;  // longer log lines are cut, never on the console
-constexpr size_t kRotateBytes = 512 * 1024;
+constexpr size_t kRotateBytes = 32 * 1024 * 1024;  // two files: days of history on a card that stays in
 
 char* g_ring = nullptr;
 size_t g_cap = 0, g_head = 0, g_tail = 0;  // next byte to write / read

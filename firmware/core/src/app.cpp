@@ -121,7 +121,7 @@ bool is_secret(std::string_view key) {
 }
 
 // Settings a board with DeviceProfile::tailnet adds (docs/tailnet.md).
-const char* const kTailnetKeys[] = {"tailnet", "ts_key"};
+const char* const kTailnetKeys[] = {"tailnet", "ts_key", "ts_derp"};
 
 // " en es ... auto": the `language` setting's values.
 std::string language_codes() {
@@ -3686,6 +3686,9 @@ std::string App::console(std::string_view raw) {
       return "@error tailnet must be on or off";
     if (key == "upload_url" && !value.empty() && (value.rfind("https://", 0) != 0 || value.back() != '/'))
       return "@error upload_url must be an https:// address ending in /";
+    if (key == "ts_derp" && !value.empty() &&
+        (value.size() > 3 || value.find_first_not_of("0123456789") != std::string::npos))
+      return "@error ts_derp must be a Tailscale relay region number (0: the fastest)";
     if (key == "ts_key" && !value.empty() && !valid_tailnet_key(value))
       return "@error ts_key must be a Tailscale auth key (tskey-...)";
     if (key == "language" && !value.empty() && value != "auto" && !i18n::parse(value))
@@ -3710,7 +3713,7 @@ std::string App::console(std::string_view raw) {
       reconnect_pending_ = network_up_;
       reconnect_at_ = now();
     }
-    if (key == "tailnet" || key == "ts_key") tailnet_reconfigured();
+    if (key == "tailnet" || key == "ts_key" || key == "ts_derp") tailnet_reconfigured();
     if (on_setting_changed) on_setting_changed(key);
     update_model();
     return "@ok " + key;

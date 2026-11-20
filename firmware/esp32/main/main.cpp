@@ -725,7 +725,7 @@ extern "C" void app_main(void) {
     if (key == "touch_wake") g_touch.set_wakes(app.touch_wake());
     if (key == "sd_log") g_sdlog.set_enabled(app.sd_log());
     if (key == "name" && hgp::board_config().bluetooth) g_phone.set_name(device_name());
-    if (key == "tailnet" || key == "ts_key") g_tailnet.settings_changed();
+    if (key == "tailnet" || key == "ts_key" || key == "ts_derp") g_tailnet.settings_changed();
 #endif
   };
 #if !CONFIG_HG_BOARD_ESP32_CYD

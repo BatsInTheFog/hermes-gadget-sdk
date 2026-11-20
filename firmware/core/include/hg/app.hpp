@@ -151,6 +151,10 @@ class App {
   // `tailnet` setting is on. The port reads the auth key from tailnet_key().
   bool tailnet_wanted() const { return profile_.tailnet && tailnet_on_; }
   const std::string& tailnet_key() const { return tailnet_key_; }
+  // The `ts_derp` setting: the tailnet relay region to use (0: the fastest, measured at start).
+  // Every machine the device talks to over the tailnet should share it (TailTiny relays only
+  // through its own region).
+  uint16_t tailnet_derp_region() const { return static_cast<uint16_t>(std::atoi(setting("ts_derp", "0").c_str())); }
   const std::string& server_url() const { return server_url_; }
   void on_transport_open();
   void on_transport_text(std::string_view text);

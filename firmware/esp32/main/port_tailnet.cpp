@@ -155,6 +155,15 @@ void TailnetLink::start() {
     app_->on_tunnel(false, "Tailnet: could not start");
     return;
   }
+  // A relay region every machine Wisp talks to shares (06-pinned-derp-region.patch). Set after
+  // init, which loads last boot's measured region, and before the tasks start.
+  derp_region_ = app_->tailnet_derp_region();
+  if (derp_region_) {
+    ml->derp_pinned_region = derp_region_;
+    ml->derp_preferred_region = derp_region_;
+    ml->derp_home_region = derp_region_;
+    ESP_LOGI(TAG, "relay region %u (ts_derp)", derp_region_);
+  }
   if (tailtiny_start(ml) != ESP_OK) {
     ESP_LOGE(TAG, "TailTiny's tasks didn't start");
     tailtiny_destroy(ml);
@@ -188,7 +197,7 @@ void TailnetLink::settings_changed() {
   if (!app_) return;
   const bool wanted = app_->tailnet_wanted();
   if (node_) {
-    if (!wanted || app_->tailnet_key() != key_) {
+    if (!wanted || app_->tailnet_key() != key_ || app_->tailnet_derp_region() != derp_region_) {
       ESP_LOGW(TAG, "tailnet settings changed: restarting to apply them");
       restart_ = true;  // tick() sets the time
     }

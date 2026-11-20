@@ -988,6 +988,7 @@ class TailnetLink {
   hg::App* app_ = nullptr;
   void* node_ = nullptr;   // tailtiny_t*
   std::string key_;        // the key node_ registered with (TailTiny keeps a pointer)
+  uint16_t derp_region_ = 0;  // the relay region node_ started with (ts_derp; 0: measured)
   std::string name_;       // its tailnet hostname, likewise
   uint32_t server_ip_ = 0; // Hermes's tailnet address in host order; 0 when it isn't one
   bool wifi_up_ = false;

@@ -32,7 +32,7 @@ namespace hgp {
 class SdRecorder final : public hg::AudioRecorder {
  public:
   static constexpr const char* kDir = "/sdcard/recordings";
-  static constexpr size_t kRingSamples = 512 * 1024;  // 1 MB of PSRAM: ~32 s at 16 kHz
+  static constexpr size_t kRingSamples = 128 * 1024;  // 256 KB of PSRAM: ~8 s at 16 kHz, far past a slow card write
   static constexpr size_t kBlockBytes = 8 * 1024;     // one card write
   static constexpr uint32_t kMinFreeMb = 64;          // refuse to start on a nearly full card
   static constexpr uint32_t kCheckpointMs = 10000;    // header and directory brought up to date
@@ -63,7 +63,8 @@ class SdRecorder final : public hg::AudioRecorder {
   std::string unsynced_name();
 
   int16_t* ring_ = nullptr;
-  uint8_t* block_ = nullptr;  // internal, DMA-capable: what the card driver writes from
+  uint8_t* block_ = nullptr;  // internal, DMA-capable: what the card driver writes from; only while recording
+  void release_block();
   TaskHandle_t task_ = nullptr;
   SemaphoreHandle_t lock_ = nullptr;  // status strings and the state
   FILE* file_ = nullptr;
